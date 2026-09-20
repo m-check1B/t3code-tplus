@@ -30,6 +30,9 @@ export const DEEPSEEK_ACP_REASONING_CONFIG_ID = "reasoning_effort";
 export const DEEPSEEK_ACP_PROVIDER_DEFAULT_REASONING_VALUE = "";
 export const DEEPSEEK_MIN_COMPATIBLE_CLI_VERSION = "0.1.5-rc.2";
 export const DEEPSEEK_PERMISSION_MODE_ENV = "DSH_PERMISSION_MODE";
+export type DeepSeekPermissionMode = "read-only" | "workspace-write" | "danger-full-access";
+/** Headless commit/PR/title generation must not inherit workspace-write. */
+export const DEEPSEEK_TEXT_GENERATION_PERMISSION_MODE: DeepSeekPermissionMode = "read-only";
 export const DEEPSEEK_CLI_VERSION_PROBE_TIMEOUT = Duration.millis(4_000);
 export { DEEPSEEK_DEFAULT_MODEL };
 
@@ -56,6 +59,11 @@ export interface DeepSeekAcpRuntimeInput extends Omit<
   readonly deepSeekSettings: DeepSeekAcpRuntimeSettings | null | undefined;
   readonly environment?: NodeJS.ProcessEnv;
   readonly runtimeMode?: RuntimeMode;
+  /**
+   * Direct `DSH_PERMISSION_MODE` value. When set, this wins over `runtimeMode`.
+   * Headless text generation must pass `read-only`.
+   */
+  readonly permissionMode?: DeepSeekPermissionMode;
   /**
    * Status probes that already ran `dsh --version` skip a second execution-path
    * check. Chat and text-generation must leave this unset so they fail closed.
@@ -91,10 +99,20 @@ export function deepSeekAcpSpawnArgs(): ReadonlyArray<string> {
 
 /**
  * DSH has no Grok-style `--permission-mode` flags. The ACP profile reads
- * `DSH_PERMISSION_MODE` (`workspace-write` asks; `danger-full-access` never).
+ * `DSH_PERMISSION_MODE` (`read-only` refuses writes; `workspace-write` asks;
+ * `danger-full-access` never). Interactive coding maps Full access onto
+ * `danger-full-access` and every other RuntimeMode onto `workspace-write`.
+ * Headless text generation must pass `read-only` explicitly.
  */
-export function deepSeekPermissionMode(runtimeMode?: RuntimeMode): string {
+export function deepSeekPermissionMode(runtimeMode?: RuntimeMode): DeepSeekPermissionMode {
   return runtimeMode === "full-access" ? "danger-full-access" : "workspace-write";
+}
+
+export function resolveDeepSeekAcpPermissionMode(input: {
+  readonly runtimeMode?: RuntimeMode | undefined;
+  readonly permissionMode?: DeepSeekPermissionMode | undefined;
+}): DeepSeekPermissionMode {
+  return input.permissionMode ?? deepSeekPermissionMode(input.runtimeMode);
 }
 
 export function buildDeepSeekAcpSpawnInput(
@@ -102,6 +120,7 @@ export function buildDeepSeekAcpSpawnInput(
   cwd: string,
   environment?: NodeJS.ProcessEnv,
   runtimeMode?: RuntimeMode,
+  permissionMode?: DeepSeekPermissionMode,
 ): AcpSessionRuntime.AcpSpawnInput {
   return {
     command: deepSeekSettings?.binaryPath || "dsh",
@@ -109,7 +128,10 @@ export function buildDeepSeekAcpSpawnInput(
     cwd,
     env: {
       ...environment,
-      [DEEPSEEK_PERMISSION_MODE_ENV]: deepSeekPermissionMode(runtimeMode),
+      [DEEPSEEK_PERMISSION_MODE_ENV]: resolveDeepSeekAcpPermissionMode({
+        runtimeMode,
+        permissionMode,
+      }),
     },
   };
 }
@@ -136,6 +158,7 @@ export const makeDeepSeekAcpRuntime = (
           input.cwd,
           input.environment,
           input.runtimeMode,
+          input.permissionMode,
         ),
         // DSH authenticate is a no-op; credentials stay in the DSH profile.
         authMethodId: DEEPSEEK_AUTH_METHOD_ID,

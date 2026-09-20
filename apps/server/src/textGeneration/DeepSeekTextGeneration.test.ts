@@ -39,6 +39,9 @@ function makeAcpDshWrapper(dir: string, env: Record<string, string>): string {
       `  process.stdout.write(${JSON.stringify(`${version}\\n`)});`,
       "  process.exit(0);",
       "}",
+      'if (process.argv[2] === "--profile" && process.argv[3] === "acp" && process.env.T3_DSH_ENV_LOG_PATH) {',
+      '  appendFileSync(process.env.T3_DSH_ENV_LOG_PATH, `${process.argv.slice(2).join("\\t")}\\t${process.env.DSH_PERMISSION_MODE ?? ""}\\n`);',
+      "}",
       execScriptSource({
         scriptPath: mockAgentPath,
         expectedArgs: ["--profile", "acp"],
@@ -174,6 +177,74 @@ it.layer(DeepSeekTextGenerationTestLayer)("DeepSeekTextGeneration", (it) => {
         expect(error._tag).toBe("TextGenerationError");
         expect(error.detail).toContain("not compatible");
       }),
+    ),
+  );
+
+  it.effect(
+    "spawns native dsh --profile acp with DSH_PERMISSION_MODE=read-only for text generation",
+    () => {
+      const envLogDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3code-dsh-text-env-"));
+      const envLogPath = NodePath.join(envLogDir, "env.log");
+      NodeFS.writeFileSync(envLogPath, "");
+
+      return withFakeAcpDsh(
+        {
+          T3_DSH_ENV_LOG_PATH: envLogPath,
+          T3_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({
+            title: "DeepSeek read-only titles",
+          }),
+        },
+        (textGeneration) =>
+          Effect.gen(function* () {
+            const generated = yield* textGeneration.generateThreadTitle({
+              cwd: process.cwd(),
+              message: "title this",
+              modelSelection: createModelSelection(
+                ProviderInstanceId.make("deepseek"),
+                DEEPSEEK_DEFAULT_MODEL,
+              ),
+            });
+            expect(generated.title).toBe("DeepSeek read-only titles");
+
+            const envRuns = NodeFS.readFileSync(envLogPath, "utf8")
+              .trim()
+              .split("\n")
+              .filter((line) => line.length > 0);
+            expect(envRuns.length).toBeGreaterThan(0);
+            expect(envRuns.every((line) => line.startsWith("--profile\tacp\tread-only"))).toBe(
+              true,
+            );
+          }),
+      );
+    },
+  );
+
+  it.effect("rejects ACP permission requests instead of allowing repository mutation", () =>
+    withFakeAcpDsh(
+      {
+        T3_ACP_EMIT_TOOL_CALLS: "1",
+        T3_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({
+          subject: "should not land",
+          body: "permission must fail closed",
+        }),
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const error = yield* Effect.flip(
+            textGeneration.generateCommitMessage({
+              cwd: process.cwd(),
+              branch: "feature/deepseek",
+              stagedSummary: "M apps/server/src/provider/Drivers/DeepSeekDriver.ts",
+              stagedPatch: "diff --git a/.../DeepSeekDriver.ts b/.../DeepSeekDriver.ts",
+              modelSelection: createModelSelection(
+                ProviderInstanceId.make("deepseek"),
+                DEEPSEEK_DEFAULT_MODEL,
+              ),
+            }),
+          );
+          expect(error._tag).toBe("TextGenerationError");
+          expect(error.detail).toContain("tool permission");
+        }),
     ),
   );
 });

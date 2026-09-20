@@ -61,6 +61,12 @@ run before the prompt. They reject profiles with such configuration before launc
 instructions and tool denial do not create a native sandbox.
 See [helper constraints](../../apps/server/src/textGeneration/AntigravityTextGeneration.ts).
 
+DeepSeek Harness interactive sessions map Full access onto `DSH_PERMISSION_MODE=danger-full-access`
+and every other runtime mode onto `workspace-write`. Headless DeepSeek text generation does not
+inherit that default: it forces `read-only` on the spawned `dsh --profile acp` process and rejects
+ACP permission requests.
+See [DeepSeek text generation](../../apps/server/src/textGeneration/DeepSeekTextGeneration.ts).
+
 ## Provider updates run only through the owning installer
 
 A one-click update is offered only when the resolved executable's path proves which installer owns

@@ -43,6 +43,9 @@ async function makeMockDshWrapper(extraEnv?: Record<string, string>, argvLogPath
       `  process.stdout.write(${JSON.stringify(`${version}\\n`)});`,
       "  process.exit(0);",
       "}",
+      'if (process.argv[2] === "--profile" && process.argv[3] === "acp" && process.env.T3_DSH_ENV_LOG_PATH) {',
+      '  appendFileSync(process.env.T3_DSH_ENV_LOG_PATH, `${process.argv.slice(2).join("\\t")}\\t${process.env.DSH_PERMISSION_MODE ?? ""}\\n`);',
+      "}",
       execScriptSource({
         scriptPath: mockAgentPath,
         expectedArgs: ["--profile", "acp"],
@@ -148,6 +151,52 @@ it.layer(deepSeekAdapterTestLayer)("DeepSeekAdapterLive", (it) => {
       );
       yield* adapter.stopSession(threadId);
     }),
+  );
+
+  it.effect(
+    "maps interactive runtimeMode onto DSH_PERMISSION_MODE and does not inherit text-generation read-only",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = yield* Effect.promise(() =>
+          NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "dsh-acp-perm-")),
+        );
+        const envLogPath = NodePath.join(tempDir, "env.log");
+        yield* Effect.promise(() => NodeFSP.writeFile(envLogPath, "", "utf8"));
+
+        const fullAccessPath = yield* Effect.promise(() =>
+          makeMockDshWrapper({ T3_DSH_ENV_LOG_PATH: envLogPath }),
+        );
+        const fullAccessAdapter = yield* makeTestAdapter(fullAccessPath);
+        const fullAccessThread = ThreadId.make("deepseek-perm-full-access");
+        yield* fullAccessAdapter.startSession({
+          threadId: fullAccessThread,
+          cwd: process.cwd(),
+          runtimeMode: "full-access",
+        });
+        yield* fullAccessAdapter.stopSession(fullAccessThread);
+
+        const supervisedPath = yield* Effect.promise(() =>
+          makeMockDshWrapper({ T3_DSH_ENV_LOG_PATH: envLogPath }),
+        );
+        const supervisedAdapter = yield* makeTestAdapter(supervisedPath);
+        const supervisedThread = ThreadId.make("deepseek-perm-supervised");
+        yield* supervisedAdapter.startSession({
+          threadId: supervisedThread,
+          cwd: process.cwd(),
+          runtimeMode: "approval-required",
+        });
+        yield* supervisedAdapter.stopSession(supervisedThread);
+
+        const envRuns = (yield* Effect.promise(() => NodeFSP.readFile(envLogPath, "utf8")))
+          .trim()
+          .split("\n")
+          .filter((line) => line.length > 0);
+        assert.deepStrictEqual(envRuns, [
+          "--profile\tacp\tdanger-full-access",
+          "--profile\tacp\tworkspace-write",
+        ]);
+        assert.isFalse(envRuns.some((line) => line.includes("read-only")));
+      }),
   );
 
   it.effect("resumes with session/resume instead of session/load", () =>

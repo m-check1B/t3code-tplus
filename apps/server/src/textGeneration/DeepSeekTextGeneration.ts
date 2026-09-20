@@ -1,4 +1,5 @@
 import * as Crypto from "effect/Crypto";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -29,8 +30,10 @@ import {
 import {
   applyDeepSeekAcpModelSelection,
   deepSeekAcpErrorDetail,
+  DEEPSEEK_TEXT_GENERATION_PERMISSION_MODE,
   makeDeepSeekAcpRuntime,
   resolveDeepSeekAcpBaseModelId,
+  selectDeepSeekPermissionOptionId,
 } from "../provider/acp/DeepSeekAcpSupport.ts";
 
 const DEEPSEEK_TIMEOUT_MS = 180_000;
@@ -64,13 +67,28 @@ export const makeDeepSeekTextGeneration = Effect.fn("makeDeepSeekTextGeneration"
     Effect.gen(function* () {
       const resolvedModel = resolveDeepSeekAcpBaseModelId(modelSelection.model);
       const outputRef = yield* Ref.make("");
+      const rejected = yield* Deferred.make<never, TextGenerationError>();
+      const reject = (detail: string) =>
+        Deferred.fail(rejected, new TextGenerationError({ operation, detail })).pipe(Effect.asVoid);
       const runtime = yield* makeDeepSeekAcpRuntime({
         deepSeekSettings,
         environment,
         childProcessSpawner: commandSpawner,
         cwd,
+        permissionMode: DEEPSEEK_TEXT_GENERATION_PERMISSION_MODE,
         clientInfo: { name: "t3-code-git-text", version: "0.0.0" },
       }).pipe(Effect.provideService(Crypto.Crypto, crypto));
+
+      yield* runtime.handleRequestPermission((params) =>
+        Effect.gen(function* () {
+          yield* reject("DeepSeek text generation requested a tool permission.");
+          const optionId = selectDeepSeekPermissionOptionId(params, "decline");
+          if (!optionId) {
+            return { outcome: { outcome: "cancelled" as const } };
+          }
+          return { outcome: { outcome: "selected" as const, optionId } };
+        }),
+      );
 
       yield* runtime.handleSessionUpdate((notification) => {
         const update = notification.update;
@@ -124,6 +142,7 @@ export const makeDeepSeekTextGeneration = Effect.fn("makeDeepSeekTextGeneration"
                 cause,
               }),
         ),
+        Effect.raceFirst(Deferred.await(rejected)),
       );
 
       const trimmed = (yield* Ref.get(outputRef)).trim();

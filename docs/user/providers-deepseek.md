@@ -24,8 +24,11 @@ value. Leave it unset to keep the model's provider default.
 ## Approvals
 
 DeepSeek Harness follows the shared [permission modes](./permission-modes.md).
-**Full access** sets DSH to `danger-full-access`. Other modes use
-`workspace-write` and still ask. DSH permission prompts are one-shot allow or
+**Full access** sets DSH to `danger-full-access`. Other interactive modes use
+`workspace-write` and still ask. Headless commit, pull-request, branch, and
+thread-title generation always spawn `dsh --profile acp` with
+`DSH_PERMISSION_MODE=read-only` and reject permission requests, so those helpers
+cannot mutate the repository. DSH permission prompts are one-shot allow or
 reject; there is no "always allow this session" option.
 
 ## Sessions

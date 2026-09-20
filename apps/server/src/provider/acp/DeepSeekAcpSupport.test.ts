@@ -14,12 +14,14 @@ import {
   DEEPSEEK_ACP_MODEL_CONFIG_ID,
   DEEPSEEK_ACP_REASONING_CONFIG_ID,
   DEEPSEEK_DEFAULT_MODEL,
+  DEEPSEEK_TEXT_GENERATION_PERMISSION_MODE,
   isDeepSeekAcpDeveloperPreviewCompatible,
   isDeepSeekCliVersionCompatible,
   isValidDeepSeekReasoningEffortToken,
   parseDeepSeekCliVersion,
   parseDeepSeekResume,
   resolveDeepSeekAcpBaseModelId,
+  resolveDeepSeekAcpPermissionMode,
   selectDeepSeekPermissionOptionId,
 } from "./DeepSeekAcpSupport.ts";
 
@@ -74,6 +76,23 @@ describe("deepSeekPermissionMode", () => {
   });
 });
 
+describe("resolveDeepSeekAcpPermissionMode", () => {
+  it("lets an explicit permission mode override interactive runtime mapping", () => {
+    expect(
+      resolveDeepSeekAcpPermissionMode({
+        runtimeMode: "full-access",
+        permissionMode: DEEPSEEK_TEXT_GENERATION_PERMISSION_MODE,
+      }),
+    ).toBe("read-only");
+    expect(resolveDeepSeekAcpPermissionMode({ runtimeMode: "full-access" })).toBe(
+      "danger-full-access",
+    );
+    expect(resolveDeepSeekAcpPermissionMode({ runtimeMode: "approval-required" })).toBe(
+      "workspace-write",
+    );
+  });
+});
+
 describe("buildDeepSeekAcpSpawnInput", () => {
   it("spawns dsh --profile acp and puts permission mode in DSH_PERMISSION_MODE", () => {
     const spawn = buildDeepSeekAcpSpawnInput(
@@ -92,6 +111,18 @@ describe("buildDeepSeekAcpSpawnInput", () => {
         DSH_PERMISSION_MODE: "danger-full-access",
       },
     });
+  });
+
+  it("forces read-only onto DSH_PERMISSION_MODE when text generation overrides the mapping", () => {
+    const spawn = buildDeepSeekAcpSpawnInput(
+      { binaryPath: "/usr/local/bin/dsh" },
+      "/tmp/project",
+      { PATH: "/usr/bin" },
+      "full-access",
+      DEEPSEEK_TEXT_GENERATION_PERMISSION_MODE,
+    );
+    expect(spawn.args).toEqual(["--profile", "acp"]);
+    expect(spawn.env?.DSH_PERMISSION_MODE).toBe("read-only");
   });
 
   it("defaults the command to dsh when no binary path is configured", () => {
