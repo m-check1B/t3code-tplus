@@ -67,10 +67,11 @@ export interface AcpPatchedProtocolOptions {
   ) => Effect.Effect<unknown, AcpError.AcpError, never>;
   readonly onTermination?: (error: AcpError.AcpError) => Effect.Effect<void, never, never>;
   /**
-   * Observes inbound JSON-RPC requests (non-empty `id`) after a decode batch is
-   * complete and before any message in that batch is offered to clientQueue or
-   * serverQueue. Used to latch `session/request_permission` before a concurrent
-   * prompt response can complete.
+   * Observes inbound JSON-RPC requests after a decode batch is complete and
+   * before any message in that batch is offered to clientQueue or serverQueue.
+   * `session/request_permission` is reported even when `id` is empty or omitted
+   * (JSON-RPC notifications), so a concurrent prompt response cannot complete
+   * first. Other methods are reported only when they carry a non-empty `id`.
    */
   readonly onIncomingRequest?: (method: string) => Effect.Effect<void, never, never>;
 }
@@ -93,6 +94,19 @@ const decodeElicitationComplete = Schema.decodeUnknownEffect(
   AcpSchema.ElicitationCompleteNotification,
 );
 const parserFactory = RpcSerialization.ndJsonRpc();
+
+function observedIncomingRequestTag(
+  message: RpcMessage.FromClientEncoded | RpcMessage.FromServerEncoded,
+): string | undefined {
+  if (message._tag !== "Request" || !("tag" in message)) {
+    return undefined;
+  }
+  const tag = message.tag;
+  if (tag === CLIENT_METHODS.session_request_permission || message.id !== "") {
+    return tag;
+  }
+  return undefined;
+}
 const MAX_BUFFERED_RAW_NOTIFICATIONS = 32;
 // Outbound JSON-RPC notification: no `id`, so peers never treat it as a request.
 const encodeJsonRpcNotification = Schema.encodeUnknownExit(
@@ -500,8 +514,9 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
           Effect.gen(function* () {
             if (options.onIncomingRequest) {
               for (const message of messages) {
-                if (message._tag === "Request" && message.id !== "") {
-                  yield* options.onIncomingRequest(message.tag);
+                const incomingTag = observedIncomingRequestTag(message);
+                if (incomingTag !== undefined) {
+                  yield* options.onIncomingRequest(incomingTag);
                 }
               }
             }

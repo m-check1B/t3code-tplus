@@ -38,6 +38,10 @@ const RequestPermissionRequest = jsonRpcRequest(
   "session/request_permission",
   AcpSchema.RequestPermissionRequest,
 );
+const RequestPermissionNotification = jsonRpcNotification(
+  "session/request_permission",
+  AcpSchema.RequestPermissionRequest,
+);
 const RequestPermissionResponse = jsonRpcResponse(AcpSchema.RequestPermissionResponse);
 const PromptExit = jsonRpcResponse(Schema.Struct({ stopReason: Schema.Literal("end_turn") }));
 const ExtRequest = jsonRpcRequest("x/test", Schema.Struct({ hello: Schema.String }));
@@ -587,6 +591,116 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
             options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
           },
           headers: [],
+        });
+        const combined = new Uint8Array(promptExit.length + permission.length);
+        combined.set(promptExit, 0);
+        combined.set(permission, promptExit.length);
+        yield* Queue.offer(input, combined);
+
+        yield* Deferred.await(clientSawExit);
+        const observed = yield* Ref.get(order);
+        assert.equal(observed[0], "observe:session/request_permission");
+        assert.isTrue(observed.includes("client-exit"));
+      }),
+  );
+
+  it.effect(
+    "latches session/request_permission with an empty JSON-RPC id before a same-batch prompt response",
+    () =>
+      Effect.gen(function* () {
+        const { stdio, input } = yield* makeInMemoryStdio();
+        const order = yield* Ref.make<ReadonlyArray<string>>([]);
+        const clientSawExit = yield* Deferred.make<void>();
+        const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
+          stdio,
+          serverRequestMethods: new Set(["session/request_permission"]),
+          onIncomingRequest: (method) =>
+            Ref.update(order, (items) => [...items, `observe:${method}`]),
+        });
+
+        yield* transport.clientProtocol
+          .run(0, (message) =>
+            Effect.gen(function* () {
+              if (message._tag === "Exit") {
+                yield* Ref.update(order, (items) => [...items, "client-exit"]);
+                yield* Deferred.succeed(clientSawExit, undefined);
+              }
+            }).pipe(Effect.asVoid),
+          )
+          .pipe(Effect.forkScoped);
+
+        const promptExit = yield* encodeJsonl(PromptExit, {
+          jsonrpc: "2.0",
+          id: 42,
+          result: { stopReason: "end_turn" },
+        });
+        const permission = yield* encodeJsonl(RequestPermissionRequest, {
+          jsonrpc: "2.0",
+          id: "",
+          method: "session/request_permission",
+          params: {
+            sessionId: "session-1",
+            toolCall: {
+              toolCallId: "tool-1",
+              title: "Mutate repository",
+            },
+            options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
+          },
+          headers: [],
+        });
+        const combined = new Uint8Array(promptExit.length + permission.length);
+        combined.set(promptExit, 0);
+        combined.set(permission, promptExit.length);
+        yield* Queue.offer(input, combined);
+
+        yield* Deferred.await(clientSawExit);
+        const observed = yield* Ref.get(order);
+        assert.equal(observed[0], "observe:session/request_permission");
+        assert.isFalse(observed.includes("server:session/request_permission"));
+      }),
+  );
+
+  it.effect(
+    "latches omitted-id session/request_permission before a same-batch prompt response",
+    () =>
+      Effect.gen(function* () {
+        const { stdio, input } = yield* makeInMemoryStdio();
+        const order = yield* Ref.make<ReadonlyArray<string>>([]);
+        const clientSawExit = yield* Deferred.make<void>();
+        const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
+          stdio,
+          serverRequestMethods: new Set(["session/request_permission"]),
+          onIncomingRequest: (method) =>
+            Ref.update(order, (items) => [...items, `observe:${method}`]),
+        });
+
+        yield* transport.clientProtocol
+          .run(0, (message) =>
+            Effect.gen(function* () {
+              if (message._tag === "Exit") {
+                yield* Ref.update(order, (items) => [...items, "client-exit"]);
+                yield* Deferred.succeed(clientSawExit, undefined);
+              }
+            }).pipe(Effect.asVoid),
+          )
+          .pipe(Effect.forkScoped);
+
+        const promptExit = yield* encodeJsonl(PromptExit, {
+          jsonrpc: "2.0",
+          id: 42,
+          result: { stopReason: "end_turn" },
+        });
+        const permission = yield* encodeJsonl(RequestPermissionNotification, {
+          jsonrpc: "2.0",
+          method: "session/request_permission",
+          params: {
+            sessionId: "session-1",
+            toolCall: {
+              toolCallId: "tool-1",
+              title: "Mutate repository",
+            },
+            options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
+          },
         });
         const combined = new Uint8Array(promptExit.length + permission.length);
         combined.set(promptExit, 0);

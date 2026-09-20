@@ -65,7 +65,8 @@ DeepSeek Harness interactive sessions map Full access onto `DSH_PERMISSION_MODE=
 and every other runtime mode onto `workspace-write`. Headless DeepSeek text generation does not
 inherit that default: it forces `read-only` on the spawned `dsh --profile acp` process and rejects
 ACP permission requests. Permission requests are latched when the inbound JSON-RPC batch is
-decoded, before client and server queues are offered, so a prompt response in the same burst
+decoded, before client and server queues are offered, including `id: ""` and omitted-id
+notification-shaped `session/request_permission` frames, so a prompt response in the same burst
 cannot complete successfully.
 See [DeepSeek text generation](../../apps/server/src/textGeneration/DeepSeekTextGeneration.ts).
 

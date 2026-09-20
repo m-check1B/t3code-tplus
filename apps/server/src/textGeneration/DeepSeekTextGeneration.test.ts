@@ -50,7 +50,12 @@ function makeAcpDshWrapper(dir: string, env: Record<string, string>): string {
   });
 }
 
-function makeAdversarialPermissionPeer(dir: string): string {
+type AdversarialPermissionId = "numeric" | "empty" | "missing";
+
+function makeAdversarialPermissionPeer(
+  dir: string,
+  permissionId: AdversarialPermissionId = "numeric",
+): string {
   const flashValue = deepSeekFlashValue;
   const catalog = {
     id: "model",
@@ -91,6 +96,7 @@ function makeAdversarialPermissionPeer(dir: string): string {
       "}",
       `const catalog = ${JSON.stringify(catalog)};`,
       `const successJson = ${JSON.stringify(successJson)};`,
+      `const permissionIdMode = ${JSON.stringify(permissionId)};`,
       'const sessionId = "mock-session-1";',
       "function writeLine(value) {",
       '  process.stdout.write(JSON.stringify(value) + "\\n");',
@@ -134,25 +140,27 @@ function makeAdversarialPermissionPeer(dir: string): string {
       "    return;",
       "  }",
       '  if (msg.method === "session/prompt") {',
-      "    process.stdout.write([",
-      "      JSON.stringify({",
-      '        jsonrpc: "2.0",',
-      "        id: 900001,",
-      '        method: "session/request_permission",',
-      "        params: {",
-      "          sessionId,",
-      "          toolCall: {",
-      '            toolCallId: "tool-call-1",',
-      '            title: "Write file",',
-      '            kind: "edit",',
-      '            status: "pending",',
-      "          },",
-      "          options: [",
-      '            { optionId: "allow-once", name: "Allow once", kind: "allow_once" },',
-      '            { optionId: "reject-once", name: "Reject", kind: "reject_once" },',
-      "          ],",
+      "    const permission = {",
+      '      jsonrpc: "2.0",',
+      '      method: "session/request_permission",',
+      "      params: {",
+      "        sessionId,",
+      "        toolCall: {",
+      '          toolCallId: "tool-call-1",',
+      '          title: "Write file",',
+      '          kind: "edit",',
+      '          status: "pending",',
       "        },",
-      "      }),",
+      "        options: [",
+      '          { optionId: "allow-once", name: "Allow once", kind: "allow_once" },',
+      '          { optionId: "reject-once", name: "Reject", kind: "reject_once" },',
+      "        ],",
+      "      },",
+      "    };",
+      '    if (permissionIdMode === "empty") permission.id = "";',
+      '    else if (permissionIdMode !== "missing") permission.id = 900001;',
+      "    process.stdout.write([",
+      "      JSON.stringify(permission),",
       "      JSON.stringify({",
       '        jsonrpc: "2.0",',
       '        method: "session/update",',
@@ -405,4 +413,86 @@ it.layer(DeepSeekTextGenerationTestLayer)("DeepSeekTextGeneration", (it) => {
         expect(error.detail).toContain("tool permission");
       }).pipe(Effect.scoped),
   );
+
+  const modelSelection = createModelSelection(
+    ProviderInstanceId.make("deepseek"),
+    DEEPSEEK_DEFAULT_MODEL,
+  );
+  const adversarialOperations = [
+    {
+      name: "generateCommitMessage",
+      run: (textGeneration: TextGeneration.TextGeneration["Service"]) =>
+        textGeneration
+          .generateCommitMessage({
+            cwd: process.cwd(),
+            branch: "feature/deepseek",
+            stagedSummary: "M apps/server/src/provider/Drivers/DeepSeekDriver.ts",
+            stagedPatch: "diff --git a/.../DeepSeekDriver.ts b/.../DeepSeekDriver.ts",
+            modelSelection,
+          })
+          .pipe(Effect.asVoid),
+    },
+    {
+      name: "generatePrContent",
+      run: (textGeneration: TextGeneration.TextGeneration["Service"]) =>
+        textGeneration
+          .generatePrContent({
+            cwd: process.cwd(),
+            baseBranch: "main",
+            headBranch: "feature/deepseek",
+            commitSummary: "Add DeepSeek provider",
+            diffSummary: "M apps/server/src/provider/Drivers/DeepSeekDriver.ts",
+            diffPatch: "diff --git a/.../DeepSeekDriver.ts b/.../DeepSeekDriver.ts",
+            modelSelection,
+          })
+          .pipe(Effect.asVoid),
+    },
+    {
+      name: "generateBranchName",
+      run: (textGeneration: TextGeneration.TextGeneration["Service"]) =>
+        textGeneration
+          .generateBranchName({
+            cwd: process.cwd(),
+            message: "add DeepSeek provider",
+            modelSelection,
+          })
+          .pipe(Effect.asVoid),
+    },
+    {
+      name: "generateThreadTitle",
+      run: (textGeneration: TextGeneration.TextGeneration["Service"]) =>
+        textGeneration
+          .generateThreadTitle({
+            cwd: process.cwd(),
+            message: "add DeepSeek provider",
+            modelSelection,
+          })
+          .pipe(Effect.asVoid),
+    },
+  ] as const;
+
+  for (const permissionId of ["empty", "missing"] as const) {
+    for (const operation of adversarialOperations) {
+      it.effect(
+        `fails ${operation.name} when permission uses ${permissionId === "empty" ? 'id:""' : "a missing id"} without awaiting a reply`,
+        () =>
+          Effect.gen(function* () {
+            const tempDir = NodeFS.mkdtempSync(
+              NodePath.join(NodeOS.tmpdir(), `t3code-dsh-text-${permissionId}-`),
+            );
+            yield* Effect.addFinalizer(() =>
+              Effect.sync(() => {
+                NodeFS.rmSync(tempDir, { recursive: true, force: true });
+              }),
+            );
+            const binaryPath = makeAdversarialPermissionPeer(tempDir, permissionId);
+            const config = decodeDeepSeekSettings({ binaryPath });
+            const textGeneration = yield* makeDeepSeekTextGeneration(config);
+            const error = yield* Effect.flip(operation.run(textGeneration));
+            expect(error._tag).toBe("TextGenerationError");
+            expect(error.detail).toContain("tool permission");
+          }).pipe(Effect.scoped),
+      );
+    }
+  }
 });

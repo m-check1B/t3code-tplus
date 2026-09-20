@@ -114,6 +114,7 @@ export interface AcpSessionRuntimeOptions {
   /**
    * Observes inbound JSON-RPC requests after a decode batch is complete and
    * before any message in that batch is routed to client or server queues.
+   * `session/request_permission` is reported even when `id` is empty or omitted.
    */
   readonly onIncomingRequest?: (method: string) => Effect.Effect<void, never, never>;
 }
