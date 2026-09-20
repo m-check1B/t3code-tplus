@@ -111,6 +111,11 @@ export interface AcpSessionRuntimeOptions {
     readonly logOutgoing?: boolean;
     readonly logger?: (event: EffectAcpProtocol.AcpProtocolLogEvent) => Effect.Effect<void, never>;
   };
+  /**
+   * Observes inbound JSON-RPC requests after a decode batch is complete and
+   * before any message in that batch is routed to client or server queues.
+   */
+  readonly onIncomingRequest?: (method: string) => Effect.Effect<void, never, never>;
 }
 
 export interface AcpSessionRequestLogEvent {
@@ -514,6 +519,7 @@ export const make = (
           ? { logOutgoing: options.protocolLogging.logOutgoing }
           : {}),
         ...(options.protocolLogging?.logger ? { logger: options.protocolLogging.logger } : {}),
+        ...(options.onIncomingRequest ? { onIncomingRequest: options.onIncomingRequest } : {}),
       }),
     ).pipe(Effect.provideService(Scope.Scope, runtimeScope));
 

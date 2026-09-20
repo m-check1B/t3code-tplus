@@ -38,6 +38,11 @@ export interface AcpClientOptions {
   ) => AcpSchema.SessionNotification;
   /** Reports input failures and process exits, even between requests. */
   readonly onTermination?: (error: AcpError.AcpError) => Effect.Effect<void, never, never>;
+  /**
+   * Observes inbound JSON-RPC requests after a decode batch is complete and
+   * before any message in that batch is routed to client or server queues.
+   */
+  readonly onIncomingRequest?: (method: string) => Effect.Effect<void, never, never>;
 }
 
 type AcpClientRaw = {
@@ -419,6 +424,7 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
       ? { transformSessionUpdate: options.transformSessionUpdate }
       : {}),
     ...(options.onTermination ? { onTermination: options.onTermination } : {}),
+    ...(options.onIncomingRequest ? { onIncomingRequest: options.onIncomingRequest } : {}),
     onNotification: dispatchNotification,
     onExtRequest: dispatchExtRequest,
   });

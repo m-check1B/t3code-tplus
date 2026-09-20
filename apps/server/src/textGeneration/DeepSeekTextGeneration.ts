@@ -1,5 +1,4 @@
 import * as Crypto from "effect/Crypto";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -67,9 +66,7 @@ export const makeDeepSeekTextGeneration = Effect.fn("makeDeepSeekTextGeneration"
     Effect.gen(function* () {
       const resolvedModel = resolveDeepSeekAcpBaseModelId(modelSelection.model);
       const outputRef = yield* Ref.make("");
-      const rejected = yield* Deferred.make<never, TextGenerationError>();
-      const reject = (detail: string) =>
-        Deferred.fail(rejected, new TextGenerationError({ operation, detail })).pipe(Effect.asVoid);
+      const permissionObserved = yield* Ref.make(false);
       const runtime = yield* makeDeepSeekAcpRuntime({
         deepSeekSettings,
         environment,
@@ -77,11 +74,12 @@ export const makeDeepSeekTextGeneration = Effect.fn("makeDeepSeekTextGeneration"
         cwd,
         permissionMode: DEEPSEEK_TEXT_GENERATION_PERMISSION_MODE,
         clientInfo: { name: "t3-code-git-text", version: "0.0.0" },
+        onIncomingRequest: (method) =>
+          method === "session/request_permission" ? Ref.set(permissionObserved, true) : Effect.void,
       }).pipe(Effect.provideService(Crypto.Crypto, crypto));
 
       yield* runtime.handleRequestPermission((params) =>
-        Effect.gen(function* () {
-          yield* reject("DeepSeek text generation requested a tool permission.");
+        Effect.sync(() => {
           const optionId = selectDeepSeekPermissionOptionId(params, "decline");
           if (!optionId) {
             return { outcome: { outcome: "cancelled" as const } };
@@ -142,8 +140,14 @@ export const makeDeepSeekTextGeneration = Effect.fn("makeDeepSeekTextGeneration"
                 cause,
               }),
         ),
-        Effect.raceFirst(Deferred.await(rejected)),
       );
+
+      if (yield* Ref.get(permissionObserved)) {
+        return yield* new TextGenerationError({
+          operation,
+          detail: "DeepSeek text generation requested a tool permission.",
+        });
+      }
 
       const trimmed = (yield* Ref.get(outputRef)).trim();
       if (!trimmed) {

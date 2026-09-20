@@ -66,6 +66,13 @@ export interface AcpPatchedProtocolOptions {
     params: unknown,
   ) => Effect.Effect<unknown, AcpError.AcpError, never>;
   readonly onTermination?: (error: AcpError.AcpError) => Effect.Effect<void, never, never>;
+  /**
+   * Observes inbound JSON-RPC requests (non-empty `id`) after a decode batch is
+   * complete and before any message in that batch is offered to clientQueue or
+   * serverQueue. Used to latch `session/request_permission` before a concurrent
+   * prompt response can complete.
+   */
+  readonly onIncomingRequest?: (method: string) => Effect.Effect<void, never, never>;
 }
 
 export interface AcpPatchedProtocol {
@@ -490,8 +497,17 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
           }),
         ),
         Effect.flatMap((messages) =>
-          Effect.forEach(messages, routeDecodedMessage, {
-            discard: true,
+          Effect.gen(function* () {
+            if (options.onIncomingRequest) {
+              for (const message of messages) {
+                if (message._tag === "Request" && message.id !== "") {
+                  yield* options.onIncomingRequest(message.tag);
+                }
+              }
+            }
+            yield* Effect.forEach(messages, routeDecodedMessage, {
+              discard: true,
+            });
           }),
         ),
       ),

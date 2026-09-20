@@ -50,6 +50,132 @@ function makeAcpDshWrapper(dir: string, env: Record<string, string>): string {
   });
 }
 
+function makeAdversarialPermissionPeer(dir: string): string {
+  const flashValue = deepSeekFlashValue;
+  const catalog = {
+    id: "model",
+    name: "Model",
+    category: "model",
+    type: "select",
+    currentValue: flashValue,
+    options: [
+      {
+        group: "deepseek-official",
+        name: "DeepSeek",
+        options: [
+          { value: flashValue, name: "DeepSeek V4 Flash" },
+          {
+            value: JSON.stringify(["deepseek-official", "deepseek-v4-pro"]),
+            name: "DeepSeek V4 Pro",
+          },
+        ],
+      },
+    ],
+  };
+  const successJson = JSON.stringify({
+    subject: "should not land",
+    body: "permission must fail closed",
+  });
+  return writeFakeCli({
+    directory: NodePath.join(dir, "bin"),
+    name: "dsh",
+    source: [
+      'import { createInterface } from "node:readline";',
+      'if (process.argv[2] === "--version") {',
+      `  process.stdout.write(${JSON.stringify("0.1.5-rc.2\\n")});`,
+      "  process.exit(0);",
+      "}",
+      'if (process.argv[2] !== "--profile" || process.argv[3] !== "acp") {',
+      '  process.stderr.write("unexpected args\\n");',
+      "  process.exit(11);",
+      "}",
+      `const catalog = ${JSON.stringify(catalog)};`,
+      `const successJson = ${JSON.stringify(successJson)};`,
+      'const sessionId = "mock-session-1";',
+      "function writeLine(value) {",
+      '  process.stdout.write(JSON.stringify(value) + "\\n");',
+      "}",
+      "const rl = createInterface({ input: process.stdin });",
+      'rl.on("line", (line) => {',
+      "  if (!line.trim()) return;",
+      "  const msg = JSON.parse(line);",
+      '  if (typeof msg.method !== "string") return;',
+      '  if (msg.method === "initialize") {',
+      "    writeLine({",
+      '      jsonrpc: "2.0",',
+      "      id: msg.id,",
+      "      result: {",
+      "        protocolVersion: 1,",
+      '        agentInfo: { name: "deepseek-harness-acp", version: "0.1.5-rc.2" },',
+      "        agentCapabilities: {",
+      "          mcpCapabilities: { http: true },",
+      "          promptCapabilities: { image: true, audio: false, embeddedContext: false },",
+      "          sessionCapabilities: { close: {}, list: {}, resume: {} },",
+      "        },",
+      "        authMethods: [],",
+      "      },",
+      "    });",
+      "    return;",
+      "  }",
+      '  if (msg.method === "authenticate") {',
+      '    writeLine({ jsonrpc: "2.0", id: msg.id, result: {} });',
+      "    return;",
+      "  }",
+      '  if (msg.method === "session/new") {',
+      '    writeLine({ jsonrpc: "2.0", id: msg.id, result: { sessionId, configOptions: [catalog] } });',
+      "    return;",
+      "  }",
+      '  if (msg.method === "session/set_config_option") {',
+      '    writeLine({ jsonrpc: "2.0", id: msg.id, result: { configOptions: [catalog] } });',
+      "    return;",
+      "  }",
+      '  if (msg.method === "session/close") {',
+      '    writeLine({ jsonrpc: "2.0", id: msg.id, result: {} });',
+      "    return;",
+      "  }",
+      '  if (msg.method === "session/prompt") {',
+      "    process.stdout.write([",
+      "      JSON.stringify({",
+      '        jsonrpc: "2.0",',
+      "        id: 900001,",
+      '        method: "session/request_permission",',
+      "        params: {",
+      "          sessionId,",
+      "          toolCall: {",
+      '            toolCallId: "tool-call-1",',
+      '            title: "Write file",',
+      '            kind: "edit",',
+      '            status: "pending",',
+      "          },",
+      "          options: [",
+      '            { optionId: "allow-once", name: "Allow once", kind: "allow_once" },',
+      '            { optionId: "reject-once", name: "Reject", kind: "reject_once" },',
+      "          ],",
+      "        },",
+      "      }),",
+      "      JSON.stringify({",
+      '        jsonrpc: "2.0",',
+      '        method: "session/update",',
+      "        params: {",
+      "          sessionId,",
+      "          update: {",
+      '            sessionUpdate: "agent_message_chunk",',
+      '            content: { type: "text", text: successJson },',
+      "          },",
+      "        },",
+      "      }),",
+      "      JSON.stringify({",
+      '        jsonrpc: "2.0",',
+      "        id: msg.id,",
+      '        result: { stopReason: "end_turn" },',
+      "      }),",
+      '    ].join("\\n") + "\\n");',
+      "  }",
+      "});",
+    ].join("\n"),
+  });
+}
+
 function withFakeAcpDsh<A, E, R>(
   env: Record<string, string>,
   effectFn: (textGeneration: TextGeneration.TextGeneration["Service"]) => Effect.Effect<A, E, R>,
@@ -246,5 +372,37 @@ it.layer(DeepSeekTextGenerationTestLayer)("DeepSeekTextGeneration", (it) => {
           expect(error.detail).toContain("tool permission");
         }),
     ),
+  );
+
+  it.effect(
+    "fails closed when a peer emits permission, valid output, and prompt success without awaiting a reply",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = NodeFS.mkdtempSync(
+          NodePath.join(NodeOS.tmpdir(), "t3code-dsh-text-adversary-"),
+        );
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            NodeFS.rmSync(tempDir, { recursive: true, force: true });
+          }),
+        );
+        const binaryPath = makeAdversarialPermissionPeer(tempDir);
+        const config = decodeDeepSeekSettings({ binaryPath });
+        const textGeneration = yield* makeDeepSeekTextGeneration(config);
+        const error = yield* Effect.flip(
+          textGeneration.generateCommitMessage({
+            cwd: process.cwd(),
+            branch: "feature/deepseek",
+            stagedSummary: "M apps/server/src/provider/Drivers/DeepSeekDriver.ts",
+            stagedPatch: "diff --git a/.../DeepSeekDriver.ts b/.../DeepSeekDriver.ts",
+            modelSelection: createModelSelection(
+              ProviderInstanceId.make("deepseek"),
+              DEEPSEEK_DEFAULT_MODEL,
+            ),
+          }),
+        );
+        expect(error._tag).toBe("TextGenerationError");
+        expect(error.detail).toContain("tool permission");
+      }).pipe(Effect.scoped),
   );
 });
