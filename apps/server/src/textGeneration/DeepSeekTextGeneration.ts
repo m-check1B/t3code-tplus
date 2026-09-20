@@ -28,6 +28,7 @@ import {
 } from "./TextGenerationUtils.ts";
 import {
   applyDeepSeekAcpModelSelection,
+  deepSeekAcpErrorDetail,
   makeDeepSeekAcpRuntime,
   resolveDeepSeekAcpBaseModelId,
 } from "../provider/acp/DeepSeekAcpSupport.ts";
@@ -119,7 +120,7 @@ export const makeDeepSeekTextGeneration = Effect.fn("makeDeepSeekTextGeneration"
             ? cause
             : new TextGenerationError({
                 operation,
-                detail: "DeepSeek ACP request failed.",
+                detail: deepSeekAcpErrorDetail(cause),
                 cause,
               }),
         ),
@@ -155,7 +156,10 @@ export const makeDeepSeekTextGeneration = Effect.fn("makeDeepSeekTextGeneration"
           ? cause
           : new TextGenerationError({
               operation,
-              detail: "DeepSeek ACP text generation failed.",
+              detail:
+                "detail" in cause && typeof cause.detail === "string" && cause.detail.trim()
+                  ? cause.detail
+                  : "DeepSeek ACP text generation failed.",
               cause,
             }),
       ),

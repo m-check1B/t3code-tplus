@@ -7,13 +7,16 @@ import * as NodeURL from "node:url";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
 import {
   DeepSeekSettings,
   ProviderDriverKind,
   ProviderInstanceId,
+  type ProviderRuntimeEvent,
   ThreadId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -30,15 +33,23 @@ const deepSeekProValue = JSON.stringify(["deepseek-official", "deepseek-v4-pro"]
 
 async function makeMockDshWrapper(extraEnv?: Record<string, string>, argvLogPath?: string) {
   const dir = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "dsh-acp-mock-"));
+  const version = extraEnv?.T3_DSH_VERSION ?? "0.1.5-rc.2";
   return writeFakeCli({
     directory: dir,
     name: "fake-dsh",
     env: { T3_ACP_DEEPSEEK: "1", ...extraEnv },
-    source: execScriptSource({
-      scriptPath: mockAgentPath,
-      expectedArgs: ["--profile", "acp"],
-      ...(argvLogPath ? { argvLogPath } : {}),
-    }),
+    source: [
+      'if (process.argv[2] === "--version") {',
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      `  process.stdout.write(${JSON.stringify(`${version}\\n`)});`,
+      "  process.exit(0);",
+      "}",
+      execScriptSource({
+        scriptPath: mockAgentPath,
+        expectedArgs: ["--profile", "acp"],
+        ...(argvLogPath ? { argvLogPath } : {}),
+      }),
+    ].join("\n"),
   });
 }
 
@@ -188,5 +199,99 @@ it.layer(deepSeekAdapterTestLayer)("DeepSeekAdapterLive", (it) => {
       }
       assert.include(error.detail, "session/resume");
     }),
+  );
+
+  it.effect("fails closed when the agent advertises resume: null", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("deepseek-resume-null");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockDshWrapper({ T3_ACP_RESUME_NULL: "1" }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+      const error = yield* adapter
+        .startSession({
+          threadId,
+          cwd: process.cwd(),
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.flip);
+      if (error._tag !== "ProviderAdapterRequestError") {
+        assert.fail(`Unexpected error: ${error._tag}`);
+      }
+      assert.include(error.detail, "session/resume");
+    }),
+  );
+
+  it.effect("fails closed on chat start when the CLI is older than 0.1.5-rc.2", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("deepseek-old-cli");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockDshWrapper({ T3_DSH_VERSION: "0.1.5-rc.1" }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+      const error = yield* adapter
+        .startSession({
+          threadId,
+          cwd: process.cwd(),
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.flip);
+      if (error._tag !== "ProviderAdapterProcessError") {
+        assert.fail(`Unexpected error: ${error._tag}`);
+      }
+      assert.include(error.detail, "not compatible");
+    }),
+  );
+
+  it.effect(
+    "marks a crashed ACP process dead so the next start resumes instead of using a ghost",
+    () =>
+      Effect.gen(function* () {
+        const threadId = ThreadId.make("deepseek-crash-resume");
+        const tempDir = yield* Effect.promise(() =>
+          NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "dsh-acp-crash-")),
+        );
+        const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
+        yield* Effect.promise(() => NodeFSP.writeFile(requestLogPath, "", "utf8"));
+        const wrapperPath = yield* Effect.promise(() =>
+          makeMockDshWrapper({
+            T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+            T3_ACP_EXIT_ON_PROMPT: "1",
+          }),
+        );
+        const adapter = yield* makeTestAdapter(wrapperPath);
+        const exited = yield* Stream.runCollect(
+          Stream.takeUntil(
+            adapter.streamEvents,
+            (event: ProviderRuntimeEvent) => event.type === "session.exited",
+          ),
+        ).pipe(Effect.forkChild);
+        const session = yield* adapter.startSession({
+          threadId,
+          cwd: process.cwd(),
+          runtimeMode: "full-access",
+        });
+        yield* adapter.sendTurn({ threadId, input: "crash" }).pipe(Effect.ignore);
+        const events = Array.from(yield* Fiber.join(exited));
+        const crash = events.find((event) => event.type === "session.exited");
+        assert.equal(crash?.type, "session.exited");
+        if (crash?.type === "session.exited") {
+          assert.equal(crash.payload.exitKind, "error");
+        }
+        assert.isFalse(yield* adapter.hasSession(threadId));
+        const stale = yield* adapter.sendTurn({ threadId, input: "ghost" }).pipe(Effect.flip);
+        assert.equal(stale._tag, "ProviderAdapterSessionNotFoundError");
+
+        yield* adapter.startSession({
+          threadId,
+          cwd: process.cwd(),
+          runtimeMode: "full-access",
+          resumeCursor: session.resumeCursor,
+        });
+        const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+        assert.isTrue(requests.some((entry) => entry.method === "session/resume"));
+        assert.isFalse(requests.some((entry) => entry.method === "session/load"));
+        yield* adapter.stopSession(threadId);
+      }),
   );
 });

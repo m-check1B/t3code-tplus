@@ -4,7 +4,6 @@ import {
   type DeepSeekSettings,
   type ModelCapabilities,
   type ServerProvider,
-  type ServerProviderAuth,
   type ServerProviderModel,
 } from "@t3tools/contracts";
 import { causeErrorTag } from "@t3tools/shared/observability";
@@ -23,8 +22,8 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import {
   DEEPSEEK_ACP_MODEL_CONFIG_ID,
   DEEPSEEK_ACP_REASONING_CONFIG_ID,
-  DEEPSEEK_MIN_COMPATIBLE_CLI_VERSION,
   currentDeepSeekModelValueFromConfigOptions,
+  deepSeekCliIncompatibleMessage,
   deepSeekModelSlugFromAcpValue,
   deepSeekSelectEntries,
   isDeepSeekAcpDeveloperPreviewCompatible,
@@ -63,7 +62,7 @@ const DEEPSEEK_ACP_INITIALIZE_TIMEOUT_MS = 8_000;
 const DEEPSEEK_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
   {
     slug: DEEPSEEK_DEFAULT_MODEL,
-    name: "DeepSeek Flash",
+    name: "DeepSeek V4 Flash",
     isCustom: false,
     isDefault: true,
     capabilities: EMPTY_CAPABILITIES,
@@ -216,6 +215,7 @@ const probeDeepSeekAcpInitialize = (
       childProcessSpawner,
       cwd: process.cwd(),
       clientInfo: { name: "t3-code-provider-probe", version: "0.0.0" },
+      skipCliCompatibilityCheck: true,
     });
     return yield* acp.initialize();
   }).pipe(Effect.scoped);
@@ -223,13 +223,21 @@ const probeDeepSeekAcpInitialize = (
 export const checkDeepSeekProviderStatus = Effect.fn("checkDeepSeekProviderStatus")(function* (
   deepSeekSettings: DeepSeekSettings,
   environment: NodeJS.ProcessEnv = process.env,
+  options?: {
+    readonly liveCatalog?: ReadonlyArray<ServerProviderModel>;
+  },
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
   ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto
 > {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
-  const fallbackModels = deepSeekModelsFromSettings(deepSeekSettings.customModels);
+  const fallbackModels = deepSeekModelsFromSettings(
+    deepSeekSettings.customModels,
+    options?.liveCatalog && options.liveCatalog.length > 0
+      ? options.liveCatalog
+      : DEEPSEEK_BUILT_IN_MODELS,
+  );
 
   if (!deepSeekSettings.enabled) {
     return buildServerProvider({
@@ -323,7 +331,7 @@ export const checkDeepSeekProviderStatus = Effect.fn("checkDeepSeekProviderStatu
         version,
         status: "error",
         auth: { status: "unknown" },
-        message: `DeepSeek Harness ${version ?? "unknown"} is not compatible with this T3 Code developer preview. Install dsh ${DEEPSEEK_MIN_COMPATIBLE_CLI_VERSION} or newer.`,
+        message: deepSeekCliIncompatibleMessage(version),
       },
     });
   }
@@ -370,12 +378,6 @@ export const checkDeepSeekProviderStatus = Effect.fn("checkDeepSeekProviderStatu
     });
   }
 
-  const auth: ServerProviderAuth = {
-    status: "authenticated",
-    type: "cached_token",
-    label: "DSH profile",
-  };
-
   return buildServerProvider({
     presentation: DEEPSEEK_PRESENTATION,
     enabled: deepSeekSettings.enabled,
@@ -384,8 +386,10 @@ export const checkDeepSeekProviderStatus = Effect.fn("checkDeepSeekProviderStatu
     probe: {
       installed: true,
       version,
-      status: "ready",
-      auth,
+      status: "warning",
+      auth: { status: "unknown" },
+      message:
+        "DeepSeek Harness is installed. Credentials and the live model catalog are validated when a session starts; they stay in the DSH profile.",
     },
   });
 });

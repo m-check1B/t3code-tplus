@@ -6,14 +6,18 @@ import {
   type RuntimeMode,
 } from "@t3tools/contracts";
 import { getProviderOptionStringSelectionValue, normalizeModelSlug } from "@t3tools/shared/model";
+import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Crypto from "effect/Crypto";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
-import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
+import { isCommandMissingCause, spawnAndCollect } from "../providerSnapshot.ts";
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
 import { collectSessionConfigOptionValues, findSessionConfigOption } from "./AcpRuntimeModel.ts";
 
@@ -26,7 +30,19 @@ export const DEEPSEEK_ACP_REASONING_CONFIG_ID = "reasoning_effort";
 export const DEEPSEEK_ACP_PROVIDER_DEFAULT_REASONING_VALUE = "";
 export const DEEPSEEK_MIN_COMPATIBLE_CLI_VERSION = "0.1.5-rc.2";
 export const DEEPSEEK_PERMISSION_MODE_ENV = "DSH_PERMISSION_MODE";
+export const DEEPSEEK_CLI_VERSION_PROBE_TIMEOUT = Duration.millis(4_000);
 export { DEEPSEEK_DEFAULT_MODEL };
+
+export function deepSeekCliIncompatibleMessage(version: string | null | undefined): string {
+  return `DeepSeek Harness ${version ?? "unknown"} is not compatible with this T3 Code developer preview. Install dsh ${DEEPSEEK_MIN_COMPATIBLE_CLI_VERSION} or newer.`;
+}
+
+export function deepSeekAcpErrorDetail(error: EffectAcpErrors.AcpError): string {
+  if ("detail" in error && typeof error.detail === "string" && error.detail.trim()) {
+    return error.detail;
+  }
+  return error.message;
+}
 
 const DEEPSEEK_REASONING_EFFORT_TOKEN = /^[a-z0-9][a-z0-9._-]{0,31}$/i;
 
@@ -40,6 +56,11 @@ export interface DeepSeekAcpRuntimeInput extends Omit<
   readonly deepSeekSettings: DeepSeekAcpRuntimeSettings | null | undefined;
   readonly environment?: NodeJS.ProcessEnv;
   readonly runtimeMode?: RuntimeMode;
+  /**
+   * Status probes that already ran `dsh --version` skip a second execution-path
+   * check. Chat and text-generation must leave this unset so they fail closed.
+   */
+  readonly skipCliCompatibilityCheck?: boolean;
 }
 
 export interface DeepSeekAcpModelSelectionErrorContext {
@@ -98,9 +119,15 @@ export const makeDeepSeekAcpRuntime = (
 ): Effect.Effect<
   AcpSessionRuntime.AcpSessionRuntime["Service"],
   EffectAcpErrors.AcpError,
-  Crypto.Crypto | Scope.Scope
+  Crypto.Crypto | Scope.Scope | ChildProcessSpawner.ChildProcessSpawner
 > =>
   Effect.gen(function* () {
+    if (input.skipCliCompatibilityCheck !== true) {
+      yield* ensureDeepSeekCliCompatible(
+        input.deepSeekSettings?.binaryPath,
+        input.environment ?? process.env,
+      );
+    }
     const acpContext = yield* Layer.build(
       AcpSessionRuntime.layer({
         ...input,
@@ -191,10 +218,76 @@ export function isDeepSeekCliVersionCompatible(version: string | null | undefine
   return compareParsedCliVersions(parsed, minimum) >= 0;
 }
 
+export const probeDeepSeekCliVersion = Effect.fn("probeDeepSeekCliVersion")(function* (
+  binaryPath: string | null | undefined,
+  environment: NodeJS.ProcessEnv,
+): Effect.fn.Return<
+  { readonly version: string | null; readonly missing: boolean; readonly failed: boolean },
+  never,
+  ChildProcessSpawner.ChildProcessSpawner
+> {
+  const command = binaryPath?.trim() || "dsh";
+  const spawned = yield* Effect.gen(function* () {
+    const spawnCommand = yield* resolveSpawnCommand(command, ["--version"], { env: environment });
+    return yield* spawnAndCollect(
+      command,
+      ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+        env: environment,
+        shell: spawnCommand.shell,
+      }),
+    );
+  }).pipe(Effect.timeoutOption(DEEPSEEK_CLI_VERSION_PROBE_TIMEOUT), Effect.result);
+
+  if (spawned._tag === "Failure") {
+    return { version: null, missing: isCommandMissingCause(spawned.failure), failed: true };
+  }
+  if (Option.isNone(spawned.success)) {
+    return { version: null, missing: false, failed: true };
+  }
+  const output = spawned.success.value;
+  const version = parseDeepSeekCliVersion(`${output.stdout}\n${output.stderr}`);
+  return {
+    version,
+    missing: false,
+    failed: output.code !== 0,
+  };
+});
+
 /**
- * DSH's developer-preview ACP surface: protocol v1 plus `session/resume`.
- * Missing resume, or a different protocol version, is incompatible — T3 must
- * not fall back to Grok's `session/load` or `session/set_model`.
+ * Shared fail-closed gate for chat and text-generation. Status probes that
+ * already classified `dsh --version` should skip this via
+ * `skipCliCompatibilityCheck`.
+ */
+export const ensureDeepSeekCliCompatible = Effect.fn("ensureDeepSeekCliCompatible")(function* (
+  binaryPath: string | null | undefined,
+  environment: NodeJS.ProcessEnv,
+): Effect.fn.Return<string, EffectAcpErrors.AcpError, ChildProcessSpawner.ChildProcessSpawner> {
+  const probed = yield* probeDeepSeekCliVersion(binaryPath, environment);
+  if (probed.missing) {
+    return yield* new EffectAcpErrors.AcpTransportError({
+      method: "dsh --version",
+      detail: "DeepSeek Harness (`dsh`) is not installed or not on PATH.",
+      cause: undefined,
+    });
+  }
+  if (probed.failed || !isDeepSeekCliVersionCompatible(probed.version)) {
+    return yield* new EffectAcpErrors.AcpTransportError({
+      method: "dsh --version",
+      detail: deepSeekCliIncompatibleMessage(probed.version),
+      cause: undefined,
+    });
+  }
+  return probed.version as string;
+});
+
+function isNonNullObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/**
+ * DSH's developer-preview ACP surface: protocol v1 plus a non-null
+ * `session/resume` capability object. `resume: null` and `session/load` are
+ * incompatible — T3 must not fall back to Grok's dialect.
  */
 export function isDeepSeekAcpDeveloperPreviewCompatible(
   initializeResult: EffectAcpSchema.InitializeResponse,
@@ -202,7 +295,7 @@ export function isDeepSeekAcpDeveloperPreviewCompatible(
   if (initializeResult.protocolVersion !== 1) {
     return false;
   }
-  return initializeResult.agentCapabilities?.sessionCapabilities?.resume !== undefined;
+  return isNonNullObject(initializeResult.agentCapabilities?.sessionCapabilities?.resume);
 }
 
 export function encodeDeepSeekAcpModelValue(provider: string, model: string): string {

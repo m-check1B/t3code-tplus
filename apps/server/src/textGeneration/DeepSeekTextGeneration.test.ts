@@ -22,21 +22,29 @@ import { DEEPSEEK_DEFAULT_MODEL } from "../provider/acp/DeepSeekAcpSupport.ts";
 const decodeDeepSeekSettings = Schema.decodeSync(DeepSeekSettings);
 const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const mockAgentPath = NodePath.join(__dirname, "../../scripts/acp-mock-agent.ts");
-const deepSeekFlashValue = JSON.stringify(["deepseek-official", "deepseek-flash"]);
+const deepSeekFlashValue = JSON.stringify(["deepseek-official", "deepseek-v4-flash"]);
 
 const DeepSeekTextGenerationTestLayer = ServerConfig.ServerConfig.layerTest(process.cwd(), {
   prefix: "t3code-deepseek-text-generation-test-",
 }).pipe(Layer.provideMerge(NodeServices.layer));
 
 function makeAcpDshWrapper(dir: string, env: Record<string, string>): string {
+  const version = env.T3_DSH_VERSION ?? "0.1.5-rc.2";
   return writeFakeCli({
     directory: NodePath.join(dir, "bin"),
     name: "dsh",
     env: { T3_ACP_DEEPSEEK: "1", ...env },
-    source: execScriptSource({
-      scriptPath: mockAgentPath,
-      expectedArgs: ["--profile", "acp"],
-    }),
+    source: [
+      'if (process.argv[2] === "--version") {',
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      `  process.stdout.write(${JSON.stringify(`${version}\\n`)});`,
+      "  process.exit(0);",
+      "}",
+      execScriptSource({
+        scriptPath: mockAgentPath,
+        expectedArgs: ["--profile", "acp"],
+      }),
+    ].join("\n"),
   });
 }
 
@@ -148,6 +156,25 @@ it.layer(DeepSeekTextGenerationTestLayer)("DeepSeekTextGeneration", (it) => {
           expect(error._tag).toBe("TextGenerationError");
           expect(error.detail).toContain("Failed to set DeepSeek ACP model");
         }),
+    ),
+  );
+
+  it.effect("fails closed when the CLI is older than 0.1.5-rc.2", () =>
+    withFakeAcpDsh({ T3_DSH_VERSION: "0.1.5-rc.1" }, (textGeneration) =>
+      Effect.gen(function* () {
+        const error = yield* Effect.flip(
+          textGeneration.generateThreadTitle({
+            cwd: process.cwd(),
+            message: "title this",
+            modelSelection: createModelSelection(
+              ProviderInstanceId.make("deepseek"),
+              DEEPSEEK_DEFAULT_MODEL,
+            ),
+          }),
+        );
+        expect(error._tag).toBe("TextGenerationError");
+        expect(error.detail).toContain("not compatible");
+      }),
     ),
   );
 });

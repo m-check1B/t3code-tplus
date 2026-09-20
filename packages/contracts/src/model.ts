@@ -166,10 +166,11 @@ export const DEFAULT_TEXT_GENERATION_MODEL = "gpt-5.6-luna";
 /** Keep the official Antigravity session's current model. Never send this ID to ACP. */
 export const ANTIGRAVITY_DEFAULT_MODEL = "antigravity-default";
 /**
- * DSH's shipped ACP default (`provider: deepseek-official`, `model: deepseek-flash`).
- * T3 stores `provider/model`; the adapter encodes that as DSH's opaque ACP value.
+ * Official DSH 0.1.5-rc.2 ACP default (`provider: deepseek-official`,
+ * `model: deepseek-v4-flash`). T3 stores `provider/model`; the adapter encodes
+ * that as DSH's opaque ACP value.
  */
-export const DEEPSEEK_DEFAULT_MODEL = "deepseek-official/deepseek-flash";
+export const DEEPSEEK_DEFAULT_MODEL = "deepseek-official/deepseek-v4-flash";
 export const DEFAULT_TEXT_GENERATION_REASONING_EFFORT = "low";
 
 export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, string>> = {
@@ -219,6 +220,11 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Partial<
     "opus-4.5": "claude-opus-4-5",
   },
   [OPENCODE_DRIVER_KIND]: {},
+  [DEEPSEEK_DRIVER_KIND]: {
+    "deepseek-flash": DEEPSEEK_DEFAULT_MODEL,
+    "deepseek-official/deepseek-flash": DEEPSEEK_DEFAULT_MODEL,
+    "deepseek-v4-flash": DEEPSEEK_DEFAULT_MODEL,
+  },
 };
 
 // ── Provider display names ────────────────────────────────────────────

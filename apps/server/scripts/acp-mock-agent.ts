@@ -17,6 +17,8 @@ const exitLogPath = process.env.T3_ACP_EXIT_LOG_PATH;
 const antigravityProfile = process.env.T3_ACP_ANTIGRAVITY === "1";
 const deepSeekProfile = process.env.T3_ACP_DEEPSEEK === "1";
 const omitResumeCapability = process.env.T3_ACP_OMIT_RESUME === "1";
+const nullResumeCapability = process.env.T3_ACP_RESUME_NULL === "1";
+const exitOnPrompt = process.env.T3_ACP_EXIT_ON_PROMPT === "1";
 const emitToolCalls = process.env.T3_ACP_EMIT_TOOL_CALLS === "1";
 const emitInterleavedAssistantToolCalls =
   process.env.T3_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS === "1";
@@ -71,7 +73,7 @@ const permissionRequestCount = Math.max(
 );
 const sessionId = "mock-session-1";
 
-const deepSeekFlashValue = JSON.stringify(["deepseek-official", "deepseek-flash"]);
+const deepSeekFlashValue = JSON.stringify(["deepseek-official", "deepseek-v4-flash"]);
 const deepSeekProValue = JSON.stringify(["deepseek-official", "deepseek-v4-pro"]);
 let currentModeId = antigravityProfile ? "default" : "ask";
 let currentModelId = deepSeekProfile
@@ -138,7 +140,7 @@ function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
             group: "deepseek-official",
             name: "DeepSeek",
             options: [
-              { value: deepSeekFlashValue, name: "DeepSeek Flash" },
+              { value: deepSeekFlashValue, name: "DeepSeek V4 Flash" },
               { value: deepSeekProValue, name: "DeepSeek V4 Pro" },
             ],
           },
@@ -442,7 +444,13 @@ const program = Effect.gen(function* () {
           agentCapabilities: {
             mcpCapabilities: { http: true },
             promptCapabilities: { image: true, audio: false, embeddedContext: false },
-            sessionCapabilities: omitResumeCapability ? {} : { close: {}, list: {}, resume: {} },
+            sessionCapabilities: omitResumeCapability
+              ? {}
+              : {
+                  close: {},
+                  list: {},
+                  resume: nullResumeCapability ? null : {},
+                },
           },
           authMethods: [],
         };
@@ -702,6 +710,9 @@ const program = Effect.gen(function* () {
     Effect.gen(function* () {
       const requestedSessionId = String(request.sessionId ?? sessionId);
       promptCount += 1;
+      if (exitOnPrompt) {
+        process.exit(7);
+      }
 
       if (completeFirstPromptOnCancel && promptCount === 1) {
         yield* agent.client.sessionUpdate({

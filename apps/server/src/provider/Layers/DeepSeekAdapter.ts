@@ -65,6 +65,7 @@ import { parsePermissionRequest } from "../acp/AcpRuntimeModel.ts";
 import { makeAcpNativeLoggerFactory } from "../acp/AcpNativeLogging.ts";
 import {
   applyDeepSeekAcpModelSelection,
+  deepSeekAcpErrorDetail,
   deepSeekModelSlugFromAcpValue,
   isDeepSeekAcpDeveloperPreviewCompatible,
   makeDeepSeekAcpRuntime,
@@ -91,6 +92,9 @@ export interface DeepSeekAdapterLiveOptions {
   readonly nativeEventLogger?: EventNdjsonLogger;
   readonly instanceId?: ProviderInstanceId;
   readonly resolveSettings?: Effect.Effect<DeepSeekSettings>;
+  readonly onConfigOptionsUpdated?: (
+    configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+  ) => Effect.Effect<void>;
 }
 
 interface PendingApproval {
@@ -114,6 +118,7 @@ interface DeepSeekSessionContext {
   activeTurnId: TurnId | undefined;
   promptsInFlight: number;
   stopped: boolean;
+  crashExit: boolean;
 }
 
 function settlePendingApprovalsAsCancelled(
@@ -264,13 +269,16 @@ export function makeDeepSeekAdapter(
       return Effect.succeed(ctx);
     };
 
-    const stopSessionInternal = (ctx: DeepSeekSessionContext) =>
+    const stopSessionInternal = (
+      ctx: DeepSeekSessionContext,
+      options?: { readonly fromEventLoop?: boolean },
+    ) =>
       Effect.gen(function* () {
-        if (ctx.stopped) return;
+        if (ctx.stopped && options?.fromEventLoop !== true) return;
         ctx.stopped = true;
         yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
         yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
-        if (ctx.notificationFiber) {
+        if (options?.fromEventLoop !== true && ctx.notificationFiber) {
           yield* Fiber.interrupt(ctx.notificationFiber);
         }
         yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
@@ -280,7 +288,7 @@ export function makeDeepSeekAdapter(
           ...(yield* makeEventStamp()),
           provider: PROVIDER,
           threadId: ctx.threadId,
-          payload: { exitKind: "graceful" },
+          payload: { exitKind: ctx.crashExit ? "error" : "graceful" },
         });
       });
 
@@ -366,6 +374,7 @@ export function makeDeepSeekAdapter(
               : {}),
             ...acpNativeLoggers,
           }).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
             Effect.provideService(Crypto.Crypto, crypto),
             Effect.provideService(Scope.Scope, sessionScope),
             Effect.mapError(
@@ -373,7 +382,7 @@ export function makeDeepSeekAdapter(
                 new ProviderAdapterProcessError({
                   provider: PROVIDER,
                   threadId: input.threadId,
-                  detail: cause.message,
+                  detail: deepSeekAcpErrorDetail(cause),
                   cause,
                 }),
             ),
@@ -509,6 +518,7 @@ export function makeDeepSeekAdapter(
             activeTurnId: undefined,
             promptsInFlight: 0,
             stopped: false,
+            crashExit: false,
           };
 
           const nf = yield* Stream.runDrain(
@@ -520,7 +530,9 @@ export function makeDeepSeekAdapter(
                     return;
                   case "ModeChanged":
                   case "AvailableCommandsUpdated":
+                    return;
                   case "ConfigOptionsUpdated":
+                    yield* options?.onConfigOptionsUpdated?.(event.configOptions) ?? Effect.void;
                     return;
                   case "AssistantItemStarted":
                     yield* offerRuntimeEvent(
@@ -611,6 +623,8 @@ export function makeDeepSeekAdapter(
                     );
                     return;
                   case "ConnectionTerminated":
+                    ctx.crashExit = true;
+                    yield* stopSessionInternal(ctx, { fromEventLoop: true });
                     return;
                 }
               }),
@@ -625,6 +639,12 @@ export function makeDeepSeekAdapter(
           ctx.notificationFiber = nf;
           sessions.set(input.threadId, ctx);
           sessionScopeTransferred = true;
+          if (started.sessionSetupResult.configOptions) {
+            yield* (
+              options?.onConfigOptionsUpdated?.(started.sessionSetupResult.configOptions) ??
+                Effect.void
+            );
+          }
 
           yield* offerRuntimeEvent({
             type: "session.started",
@@ -906,10 +926,10 @@ export function makeDeepSeekAdapter(
       });
 
     const stopAll: DeepSeekAdapterShape["stopAll"] = () =>
-      Effect.forEach(sessions.values(), stopSessionInternal, { discard: true });
+      Effect.forEach(sessions.values(), (ctx) => stopSessionInternal(ctx), { discard: true });
 
     yield* Effect.addFinalizer(() =>
-      Effect.forEach(sessions.values(), stopSessionInternal, { discard: true }).pipe(
+      Effect.forEach(sessions.values(), (ctx) => stopSessionInternal(ctx), { discard: true }).pipe(
         Effect.catch((cause) =>
           Effect.logError("Failed to emit DeepSeek session shutdown event.", { cause }),
         ),

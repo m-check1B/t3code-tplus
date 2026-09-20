@@ -3,11 +3,12 @@
  *
  * @module provider/Drivers/DeepSeekDriver
  */
-import { DeepSeekSettings, ProviderDriverKind } from "@t3tools/contracts";
+import { DeepSeekSettings, ProviderDriverKind, type ServerProviderModel } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -19,6 +20,7 @@ import { makeDeepSeekTextGeneration } from "../../textGeneration/DeepSeekTextGen
 import { ProviderDriverError } from "../Errors.ts";
 import { makeDeepSeekAdapter } from "../Layers/DeepSeekAdapter.ts";
 import {
+  buildDeepSeekModelsFromConfigOptions,
   buildInitialDeepSeekProviderSnapshot,
   checkDeepSeekProviderStatus,
   enrichDeepSeekSnapshot,
@@ -86,14 +88,28 @@ export const DeepSeekDriver: ProviderDriver<DeepSeekSettings, DeepSeekDriverEnv>
         continuationGroupKey: continuationIdentity.continuationKey,
       });
       const effectiveConfig = { ...config, enabled } satisfies DeepSeekSettings;
+      const liveCatalogRef = yield* Ref.make<ReadonlyArray<ServerProviderModel> | null>(null);
       const adapter = yield* makeDeepSeekAdapter(effectiveConfig, {
         environment: processEnv,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
         instanceId,
+        onConfigOptionsUpdated: (configOptions) =>
+          Effect.gen(function* () {
+            const models = buildDeepSeekModelsFromConfigOptions(configOptions);
+            if (models.length === 0) return;
+            yield* Ref.set(liveCatalogRef, models);
+          }),
       });
       const textGeneration = yield* makeDeepSeekTextGeneration(effectiveConfig, processEnv);
 
-      const checkProvider = checkDeepSeekProviderStatus(effectiveConfig, processEnv).pipe(
+      const checkProvider = Effect.gen(function* () {
+        const liveCatalog = yield* Ref.get(liveCatalogRef);
+        return yield* checkDeepSeekProviderStatus(
+          effectiveConfig,
+          processEnv,
+          liveCatalog ? { liveCatalog } : undefined,
+        );
+      }).pipe(
         Effect.map(stampIdentity),
         Effect.provideService(HttpClient.HttpClient, httpClient),
         Effect.provideService(Crypto.Crypto, crypto),

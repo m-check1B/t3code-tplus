@@ -26,7 +26,7 @@ const decodeDeepSeekSettings = Schema.decodeSync(DeepSeekSettings);
 const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const mockAgentPath = NodePath.resolve(__dirname, "../../../scripts/acp-mock-agent.ts");
 
-const flashValue = JSON.stringify(["deepseek-official", "deepseek-flash"]);
+const flashValue = JSON.stringify(["deepseek-official", "deepseek-v4-flash"]);
 const proValue = JSON.stringify(["deepseek-official", "deepseek-v4-pro"]);
 
 describe("buildDeepSeekModelsFromConfigOptions", () => {
@@ -43,7 +43,7 @@ describe("buildDeepSeekModelsFromConfigOptions", () => {
             group: "deepseek-official",
             name: "DeepSeek",
             options: [
-              { value: flashValue, name: "DeepSeek Flash" },
+              { value: flashValue, name: "DeepSeek V4 Flash" },
               { value: proValue, name: "DeepSeek V4 Pro" },
             ],
           },
@@ -115,6 +115,7 @@ const writeFakeDshCli = (input: {
   readonly versionExitCode?: number;
   readonly acp?: boolean;
   readonly omitResume?: boolean;
+  readonly resumeNull?: boolean;
 }) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -125,6 +126,7 @@ const writeFakeDshCli = (input: {
       env: {
         ...(input.acp ? { T3_ACP_DEEPSEEK: "1" } : {}),
         ...(input.omitResume ? { T3_ACP_OMIT_RESUME: "1", T3_ACP_DEEPSEEK: "1" } : {}),
+        ...(input.resumeNull ? { T3_ACP_RESUME_NULL: "1", T3_ACP_DEEPSEEK: "1" } : {}),
       },
       source: [
         'if (process.argv[2] === "--version") {',
@@ -132,7 +134,7 @@ const writeFakeDshCli = (input: {
         `  process.stdout.write(${JSON.stringify(`${input.version ?? "0.1.5-rc.2"}\\n`)});`,
         `  process.exit(${input.versionExitCode ?? 0});`,
         "}",
-        input.acp || input.omitResume
+        input.acp || input.omitResume || input.resumeNull
           ? [
               'if (process.argv[2] === "--profile" && process.argv[3] === "acp") {',
               // @effect-diagnostics-next-line preferSchemaOverJson:off
@@ -216,7 +218,23 @@ it.layer(NodeServices.layer)("checkDeepSeekProviderStatus", (it) => {
     }),
   );
 
-  it.effect("marks a compatible dsh --profile acp install ready without T3-owned credentials", () =>
+  it.effect("fails closed when ACP initialize advertises resume: null", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const dshPath = yield* writeFakeDshCli({ resumeNull: true });
+          return yield* checkDeepSeekProviderStatus(
+            decodeDeepSeekSettings({ enabled: true, binaryPath: dshPath }),
+          );
+        }),
+      );
+      expect(snapshot.installed).toBe(true);
+      expect(snapshot.status).toBe("error");
+      expect(snapshot.message).toContain("session/resume");
+    }),
+  );
+
+  it.effect("does not claim authenticated or ready from initialize alone", () =>
     Effect.gen(function* () {
       const snapshot = yield* Effect.scoped(
         Effect.gen(function* () {
@@ -227,11 +245,50 @@ it.layer(NodeServices.layer)("checkDeepSeekProviderStatus", (it) => {
         }),
       );
       expect(snapshot.installed).toBe(true);
-      expect(snapshot.status).toBe("ready");
+      expect(snapshot.status).toBe("warning");
       expect(snapshot.version).toBe("0.1.5-rc.2");
-      expect(snapshot.auth.status).toBe("authenticated");
-      expect(snapshot.auth).toMatchObject({ label: "DSH profile" });
+      expect(snapshot.auth.status).toBe("unknown");
+      expect(snapshot.message).toContain("when a session starts");
+      expect(snapshot.message).not.toMatch(/authenticated|logged in/i);
       expect(snapshot.models.some((model) => model.slug === DEEPSEEK_DEFAULT_MODEL)).toBe(true);
+    }),
+  );
+
+  it.effect("refresh uses a live catalog discovered from session config options", () =>
+    Effect.gen(function* () {
+      const liveCatalog = buildDeepSeekModelsFromConfigOptions([
+        {
+          id: DEEPSEEK_ACP_MODEL_CONFIG_ID,
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: proValue,
+          options: [
+            {
+              group: "deepseek-official",
+              name: "DeepSeek",
+              options: [
+                { value: flashValue, name: "DeepSeek V4 Flash" },
+                { value: proValue, name: "DeepSeek V4 Pro" },
+              ],
+            },
+          ],
+        },
+      ]);
+      const snapshot = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const dshPath = yield* writeFakeDshCli({ acp: true });
+          return yield* checkDeepSeekProviderStatus(
+            decodeDeepSeekSettings({ enabled: true, binaryPath: dshPath }),
+            process.env,
+            { liveCatalog },
+          );
+        }),
+      );
+      expect(snapshot.models.map((model) => model.slug)).toEqual([
+        DEEPSEEK_DEFAULT_MODEL,
+        "deepseek-official/deepseek-v4-pro",
+      ]);
     }),
   );
 });

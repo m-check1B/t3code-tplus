@@ -10,10 +10,13 @@ keep credentials in the DeepSeek Harness profile on that machine.
 
 ## Models
 
-The picker starts with DeepSeek Flash (`deepseek-official/deepseek-flash`), the
-ACP profile's shipped default. Refresh provider status after changing DSH models
-or adding custom slugs. Existing threads keep their selected model even if it
-leaves the catalog; if DSH rejects it, choose an available model and retry.
+The picker starts with DeepSeek V4 Flash (`deepseek-official/deepseek-v4-flash`),
+the official DSH 0.1.5-rc.2 ACP default, plus any custom slugs you add. Provider
+status checks `dsh --version` and ACP `initialize` only; that does not log in or
+load the live catalog. After a DeepSeek session has started, **Refresh provider
+status** includes models discovered from that session's `session/set_config_option`
+catalog. Existing threads keep their selected model even if it leaves the catalog;
+if DSH rejects it, choose an available model and retry.
 
 Reasoning effort is sent as DSH's `session/set_config_option` `reasoning_effort`
 value. Leave it unset to keep the model's provider default.
@@ -33,5 +36,7 @@ transcript updates on resume and does not support provider-side rollback.
 ## Troubleshooting
 
 If the provider card says DeepSeek is not installed, put `dsh` on `PATH` or set
-**Binary path**. If it reports an incompatible developer preview, upgrade `dsh`
-to 0.1.5-rc.2 or newer. T3 will not fall back to another provider's ACP dialect.
+**Binary path**. A successful initialize does not mean T3 has DSH credentials;
+those stay in the DSH profile and are checked when a session starts. If it
+reports an incompatible developer preview, upgrade `dsh` to 0.1.5-rc.2 or newer.
+T3 will not fall back to another provider's ACP dialect.

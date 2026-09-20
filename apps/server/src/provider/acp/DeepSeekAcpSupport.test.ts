@@ -23,7 +23,7 @@ import {
   selectDeepSeekPermissionOptionId,
 } from "./DeepSeekAcpSupport.ts";
 
-const flashValue = JSON.stringify(["deepseek-official", "deepseek-flash"]);
+const flashValue = JSON.stringify(["deepseek-official", "deepseek-v4-flash"]);
 const proValue = JSON.stringify(["deepseek-official", "deepseek-v4-pro"]);
 
 const catalog: ReadonlyArray<EffectAcpSchema.SessionConfigOption> = [
@@ -38,7 +38,7 @@ const catalog: ReadonlyArray<EffectAcpSchema.SessionConfigOption> = [
         group: "deepseek-official",
         name: "DeepSeek",
         options: [
-          { value: flashValue, name: "DeepSeek Flash" },
+          { value: flashValue, name: "DeepSeek V4 Flash" },
           { value: proValue, name: "DeepSeek V4 Pro" },
         ],
       },
@@ -103,10 +103,11 @@ describe("DeepSeek model slug encoding", () => {
   it("round-trips DSH's opaque JSON catalog values through provider/model slugs", () => {
     expect(decodeDeepSeekAcpModelValue(flashValue)).toEqual({
       provider: "deepseek-official",
-      model: "deepseek-flash",
+      model: "deepseek-v4-flash",
     });
     expect(deepSeekModelSlugFromAcpValue(flashValue)).toBe(DEEPSEEK_DEFAULT_MODEL);
     expect(deepSeekAcpValueFromModelSlug(DEEPSEEK_DEFAULT_MODEL)).toBe(flashValue);
+    expect(deepSeekAcpValueFromModelSlug("deepseek-v4-flash")).toBe(flashValue);
     expect(deepSeekAcpValueFromModelSlug("deepseek-flash")).toBe(flashValue);
     expect(deepSeekAcpValueFromModelSlug(flashValue)).toBe(flashValue);
   });
@@ -140,6 +141,12 @@ describe("isDeepSeekAcpDeveloperPreviewCompatible", () => {
       isDeepSeekAcpDeveloperPreviewCompatible({
         protocolVersion: 1,
         agentCapabilities: { loadSession: true },
+      }),
+    ).toBe(false);
+    expect(
+      isDeepSeekAcpDeveloperPreviewCompatible({
+        protocolVersion: 1,
+        agentCapabilities: { sessionCapabilities: { resume: null } },
       }),
     ).toBe(false);
     expect(isDeepSeekAcpDeveloperPreviewCompatible({ protocolVersion: 2 })).toBe(false);
