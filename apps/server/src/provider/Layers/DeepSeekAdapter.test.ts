@@ -40,7 +40,6 @@ async function makeMockDshWrapper(extraEnv?: Record<string, string>, argvLogPath
     env: { T3_ACP_DEEPSEEK: "1", ...extraEnv },
     source: [
       'if (process.argv[2] === "--version") {',
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       `  process.stdout.write(${JSON.stringify(`${version}\\n`)});`,
       "  process.exit(0);",
       "}",
