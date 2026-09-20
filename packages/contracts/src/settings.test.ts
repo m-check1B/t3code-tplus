@@ -743,6 +743,7 @@ describe("provider enabled defaults", () => {
     expect(decoded.providers.claudeAgent.enabled).toBe(true);
     expect(decoded.providers.cursor.enabled).toBe(false);
     expect(decoded.providers.grok.enabled).toBe(false);
+    expect(decoded.providers.deepseek.enabled).toBe(false);
     expect(decoded.providers.opencode.enabled).toBe(false);
   });
 

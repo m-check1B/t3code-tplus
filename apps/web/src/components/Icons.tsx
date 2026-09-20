@@ -261,6 +261,19 @@ export const CursorIcon: Icon = ({ className, ...props }) => (
   </svg>
 );
 
+export const DeepSeekIcon: Icon = ({ className, ...props }) => (
+  <svg {...props} viewBox="0 0 24 24" fill="none" className={cn(className)}>
+    <path
+      fill="#4D6BFE"
+      d="M4.2 12.4c0-4.4 3.3-8 8.2-8 3.3 0 5.6 1.5 7.1 3.7l-2.3 1.6C16.1 8.1 14.7 7.2 12.4 7.2c-3.1 0-5.2 2.2-5.2 5.2s2.1 5.2 5.2 5.2c2.3 0 3.7-.9 4.8-2.5l2.3 1.6c-1.5 2.2-3.8 3.7-7.1 3.7-4.9 0-8.2-3.6-8.2-8z"
+    />
+    <path
+      fill="#4D6BFE"
+      d="M13.1 10.2c1.6 0 2.6.8 2.6 2.2s-1 2.2-2.6 2.2-2.6-.8-2.6-2.2.9-2.2 2.6-2.2z"
+    />
+  </svg>
+);
+
 export const GrokIcon: Icon = ({ className, ...props }) => (
   <svg
     {...props}

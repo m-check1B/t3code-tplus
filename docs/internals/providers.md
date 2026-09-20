@@ -39,7 +39,10 @@ and removal must respect those leases instead of replacing executables under a r
 
 Opening a provider session can start MCP servers, run hooks, or launch a login browser.
 [Grok probes](../../apps/server/src/provider/Layers/GrokProvider.ts) avoid authentication and
-session creation for this reason. Antigravity likewise reserves authenticated catalog sessions for
+session creation for this reason. DeepSeek Harness probes `dsh --version` and ACP `initialize`
+only; they must not create a session, read the DSH credential store, or fall back to Grok's
+`session/load` / `session/set_model` dialect when `session/resume` is missing.
+Antigravity likewise reserves authenticated catalog sessions for
 explicit setup or model refresh; background checks use initialization only.
 
 [Antigravity sign-in](../../apps/server/src/provider/AntigravityAuth.ts) belongs to the initiating

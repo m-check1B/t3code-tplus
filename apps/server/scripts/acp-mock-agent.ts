@@ -15,6 +15,8 @@ import type * as AcpSchema from "effect-acp/schema";
 const requestLogPath = process.env.T3_ACP_REQUEST_LOG_PATH;
 const exitLogPath = process.env.T3_ACP_EXIT_LOG_PATH;
 const antigravityProfile = process.env.T3_ACP_ANTIGRAVITY === "1";
+const deepSeekProfile = process.env.T3_ACP_DEEPSEEK === "1";
+const omitResumeCapability = process.env.T3_ACP_OMIT_RESUME === "1";
 const emitToolCalls = process.env.T3_ACP_EMIT_TOOL_CALLS === "1";
 const emitInterleavedAssistantToolCalls =
   process.env.T3_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS === "1";
@@ -69,8 +71,15 @@ const permissionRequestCount = Math.max(
 );
 const sessionId = "mock-session-1";
 
+const deepSeekFlashValue = JSON.stringify(["deepseek-official", "deepseek-flash"]);
+const deepSeekProValue = JSON.stringify(["deepseek-official", "deepseek-v4-pro"]);
 let currentModeId = antigravityProfile ? "default" : "ask";
-let currentModelId = antigravityProfile ? "gemini-test-low" : "default";
+let currentModelId = deepSeekProfile
+  ? deepSeekFlashValue
+  : antigravityProfile
+    ? "gemini-test-low"
+    : "default";
+let currentDeepSeekReasoningEffort = "";
 let parameterizedModelPicker = false;
 let currentReasoning = "medium";
 let currentContext = "272k";
@@ -116,6 +125,39 @@ process.once("exit", (code) => {
 });
 
 function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
+  if (deepSeekProfile) {
+    return [
+      {
+        id: "model",
+        name: "Model",
+        category: "model",
+        type: "select" as const,
+        currentValue: currentModelId,
+        options: [
+          {
+            group: "deepseek-official",
+            name: "DeepSeek",
+            options: [
+              { value: deepSeekFlashValue, name: "DeepSeek Flash" },
+              { value: deepSeekProValue, name: "DeepSeek V4 Pro" },
+            ],
+          },
+        ],
+      },
+      {
+        id: "reasoning_effort",
+        name: "Reasoning effort",
+        category: "thought_level",
+        type: "select" as const,
+        currentValue: currentDeepSeekReasoningEffort,
+        options: [
+          { value: "", name: "Provider default" },
+          { value: "low", name: "Low" },
+          { value: "high", name: "High" },
+        ],
+      },
+    ];
+  }
   if (antigravityProfile) {
     return [
       {
@@ -393,6 +435,18 @@ const program = Effect.gen(function* () {
       }
       parameterizedModelPicker =
         request.clientCapabilities?._meta?.parameterizedModelPicker === true;
+      if (deepSeekProfile) {
+        return {
+          protocolVersion: 1,
+          agentInfo: { name: "deepseek-harness-acp", version: "0.1.5-rc.2" },
+          agentCapabilities: {
+            mcpCapabilities: { http: true },
+            promptCapabilities: { image: true, audio: false, embeddedContext: false },
+            sessionCapabilities: omitResumeCapability ? {} : { close: {}, list: {}, resume: {} },
+          },
+          authMethods: [],
+        };
+      }
       if (antigravityProfile) {
         return {
           protocolVersion: 1,
@@ -438,6 +492,12 @@ const program = Effect.gen(function* () {
       if (antigravityProfile) {
         yield* publishAntigravityCommands(sessionId);
       }
+      if (deepSeekProfile) {
+        return {
+          sessionId,
+          configOptions: configOptions(),
+        };
+      }
       return {
         sessionId,
         modes: modeState(),
@@ -449,18 +509,26 @@ const program = Effect.gen(function* () {
 
   yield* agent.handleResumeSession((request) =>
     Effect.gen(function* () {
-      yield* agent.client.sessionUpdate({
-        sessionId: request.sessionId,
-        update: {
-          sessionUpdate: "user_message_chunk",
-          content: { type: "text", text: "native-resume-started" },
-        },
-      });
+      if (!deepSeekProfile) {
+        yield* agent.client.sessionUpdate({
+          sessionId: request.sessionId,
+          update: {
+            sessionUpdate: "user_message_chunk",
+            content: { type: "text", text: "native-resume-started" },
+          },
+        });
+      }
       if (waitForResumeRelease) {
         yield* Deferred.await(resumeRelease);
       }
       if (antigravityProfile) {
         yield* publishAntigravityCommands(request.sessionId);
+      }
+      if (deepSeekProfile) {
+        return {
+          configOptions: configOptions(),
+          _meta: { nativeResume: true },
+        };
       }
       return {
         modes: modeState(),
@@ -495,6 +563,12 @@ const program = Effect.gen(function* () {
 
   yield* agent.handleLoadSession((request) =>
     Effect.gen(function* () {
+      if (deepSeekProfile) {
+        return yield* AcpError.AcpRequestError.invalidParams(
+          "Mock DeepSeek Harness does not support session/load",
+          { method: "session/load", params: request },
+        );
+      }
       const requestedSessionId = String(request.sessionId ?? sessionId);
       if (failLoadSession) {
         return yield* AcpError.AcpRequestError.internalError("Mock load session failure");
@@ -535,6 +609,12 @@ const program = Effect.gen(function* () {
 
   yield* agent.handleSetSessionModel((request) =>
     Effect.gen(function* () {
+      if (deepSeekProfile) {
+        return yield* AcpError.AcpRequestError.invalidParams(
+          "Mock DeepSeek Harness does not support session/set_model",
+          { method: "session/set_model", params: request },
+        );
+      }
       if (!modelState().availableModels.some((model) => model.modelId === request.modelId)) {
         return yield* AcpError.AcpRequestError.invalidParams(
           `Unknown mock model id: ${request.modelId}`,
@@ -570,6 +650,9 @@ const program = Effect.gen(function* () {
       }
       if (request.configId === "model" && typeof request.value === "string") {
         currentModelId = request.value;
+      }
+      if (request.configId === "reasoning_effort" && typeof request.value === "string") {
+        currentDeepSeekReasoningEffort = request.value;
       }
       if (request.configId === "reasoning" && typeof request.value === "string") {
         currentReasoning = request.value;
