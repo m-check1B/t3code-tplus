@@ -2400,6 +2400,7 @@ export const OrchestrationTurnResultInput = Schema.Struct({
 export type OrchestrationTurnResultInput = typeof OrchestrationTurnResultInput.Type;
 
 export const OrchestrationTurnResult = Schema.Struct({
+  assistantMessageId: Schema.NullOr(MessageId),
   threadId: ThreadId,
   messageId: MessageId,
   turnCommandId: CommandId,

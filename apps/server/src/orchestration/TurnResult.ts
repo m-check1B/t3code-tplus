@@ -19,6 +19,7 @@ export const readTurnResult = Effect.fn("orchestration.readTurnResult")(function
     instanceId: string | null;
     model: string | null;
     optionsJson: string | null;
+    assistantMessageId: string | null;
     outputText: string | null;
     outputBytes: number | null;
     streaming: number | null;
@@ -28,6 +29,7 @@ export const readTurnResult = Effect.fn("orchestration.readTurnResult")(function
       json_extract(events.payload_json, '$.modelSelection.instanceId') AS "instanceId",
       json_extract(events.payload_json, '$.modelSelection.model') AS model,
       json_extract(events.payload_json, '$.modelSelection.options') AS "optionsJson",
+      messages.message_id AS "assistantMessageId",
       CASE WHEN length(CAST(messages.text AS BLOB)) <= ${MAX_TURN_RESULT_BYTES}
         THEN messages.text ELSE NULL END AS "outputText",
       length(CAST(messages.text AS BLOB)) AS "outputBytes",
@@ -99,6 +101,7 @@ export const readTurnResult = Effect.fn("orchestration.readTurnResult")(function
     yield* decodeTurnResult({
       ...input,
       turnId: row.turnId,
+      assistantMessageId: state === "succeeded" ? row.assistantMessageId : null,
       instanceId: row.instanceId,
       model: row.model,
       effort,

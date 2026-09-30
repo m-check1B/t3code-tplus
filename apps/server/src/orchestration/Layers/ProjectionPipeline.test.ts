@@ -4481,6 +4481,7 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
         effort: "high",
         state: "succeeded",
         outputText: "Actual projected reply",
+        assistantMessageId: assistantId,
       });
       const next = {
         threadId,
@@ -4505,6 +4506,7 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
       const pending = Option.getOrThrow(yield* readTurnResult(next));
       assert.equal(pending.state, "pending");
       assert.equal(pending.outputText, null);
+      assert.equal(pending.assistantMessageId, null);
       assert.equal(
         Option.getOrThrow(yield* readTurnResult(input)).outputText,
         "Actual projected reply",

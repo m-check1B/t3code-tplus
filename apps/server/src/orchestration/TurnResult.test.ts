@@ -34,6 +34,7 @@ it.effect(
       const pending = Option.getOrThrow(yield* readTurnResult(input));
       assert.equal(pending.state, "pending");
       assert.equal(pending.outputText, null);
+      assert.equal(pending.assistantMessageId, null);
       for (const mismatch of [
         { ...input, threadId: ThreadId.make("foreign") },
         { ...input, messageId: MessageId.make("user-old") },
@@ -51,11 +52,14 @@ it.effect("returns only the correlated terminal assistant text, with a byte boun
     VALUES ('assistant-new','thread-1','turn-new','assistant','REAL OUTPUT',0,'2026-09-30T00:00:00Z','2026-09-30T00:00:00Z')`;
     yield* sql`INSERT INTO projection_turns (thread_id,turn_id,pending_message_id,assistant_message_id,state,requested_at,checkpoint_files_json)
     VALUES ('thread-1','turn-new','user-new','assistant-new','running','2026-09-30T00:00:00Z','[]')`;
-    assert.equal(Option.getOrThrow(yield* readTurnResult(input)).state, "pending");
+    const pending = Option.getOrThrow(yield* readTurnResult(input));
+    assert.equal(pending.state, "pending");
+    assert.equal(pending.assistantMessageId, null);
     yield* sql`UPDATE projection_turns SET state = 'completed' WHERE turn_id = 'turn-new'`;
     const result = Option.getOrThrow(yield* readTurnResult(input));
     assert.equal(result.state, "succeeded");
     assert.equal(result.outputText, "REAL OUTPUT");
+    assert.equal(result.assistantMessageId, "assistant-new");
     assert.equal(result.turnId, "turn-new");
     assert.equal(result.instanceId, "codex");
     assert.equal(result.model, "model");
@@ -92,8 +96,11 @@ it.effect(
       const failed = Option.getOrThrow(yield* readTurnResult(input));
       assert.equal(failed.state, "failed");
       assert.equal(failed.outputText, null);
+      assert.equal(failed.assistantMessageId, null);
       yield* sql`UPDATE projection_turns SET state = 'interrupted' WHERE turn_id = 'turn-new'`;
-      assert.equal(Option.getOrThrow(yield* readTurnResult(input)).state, "cancelled");
+      const cancelled = Option.getOrThrow(yield* readTurnResult(input));
+      assert.equal(cancelled.state, "cancelled");
+      assert.equal(cancelled.assistantMessageId, null);
       yield* sql`UPDATE orchestration_events SET payload_json = json_set(payload_json, '$.modelSelection.options', json('[{"id":"effort","value":"high"},{"id":"budget","value":"low"}]'))`;
       assert.isTrue(Option.isNone(yield* readTurnResult(input)));
     }).pipe(Effect.provide(SqlitePersistenceMemory)),
