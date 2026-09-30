@@ -7,6 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
+import { readTurnResult } from "./TurnResult.ts";
 import { projectThreadDetailSnapshot } from "./ActivityPayloadProjection.ts";
 import { cleanupFailedUploadedAttachments, normalizeDispatchCommand } from "./Normalizer.ts";
 import {
@@ -29,6 +30,28 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
     const projectCloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
 
     return handlers
+      .handle(
+        "turnResultCapabilities",
+        Effect.fn("environment.orchestration.turnResultCapabilities")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return { talkTurnResult: "v1" as const };
+        }),
+      )
+      .handle(
+        "turnResult",
+        Effect.fn("environment.orchestration.turnResult")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          const result = yield* readTurnResult(args.payload).pipe(
+            Effect.catch((cause) =>
+              failEnvironmentInternal("orchestration_thread_snapshot_failed", cause),
+            ),
+          );
+          if (Option.isNone(result)) return yield* failEnvironmentNotFound("thread_not_found");
+          return result.value;
+        }),
+      )
       .handle(
         "snapshot",
         Effect.fn("environment.orchestration.snapshot")(function* (args) {

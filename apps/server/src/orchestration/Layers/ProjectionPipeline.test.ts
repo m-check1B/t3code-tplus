@@ -45,6 +45,7 @@ import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
 import { ServerConfig } from "../../config.ts";
+import { readTurnResult } from "../TurnResult.ts";
 
 const makeProjectionPipelinePrefixedTestLayer = (prefix: string) =>
   OrchestrationProjectionPipelineLive.pipe(
@@ -4373,6 +4374,143 @@ const engineLayer = it.layer(
 );
 
 engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
+  it.effect("correlates accepted dispatch through projected completion to exact turn result", () =>
+    Effect.gen(function* () {
+      const engine = yield* OrchestrationEngineService;
+      const threadId = ThreadId.make("thread-exact-result");
+      const projectId = ProjectId.make("project-exact-result");
+      const messageId = MessageId.make("user-exact-result");
+      const turnCommandId = CommandId.make("start-exact-result");
+      const turnId = TurnId.make("turn-exact-result");
+      const assistantId = MessageId.make("assistant-exact-result");
+      const createdAt = "2026-09-30T00:00:00.000Z";
+      const modelSelection = {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "synthetic-model",
+        options: [{ id: "reasoningEffort", value: "high" }],
+      };
+      const input = { threadId, messageId, turnCommandId };
+      yield* engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("project-result"),
+        projectId,
+        title: "Synthetic",
+        workspaceRoot: "/tmp/synthetic-result",
+        defaultModelSelection: modelSelection,
+        createdAt,
+      });
+      yield* engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("thread-result"),
+        threadId,
+        projectId,
+        title: "Synthetic",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      });
+      yield* engine.dispatch({
+        type: "thread.turn.start",
+        commandId: turnCommandId,
+        threadId,
+        message: { messageId, role: "user", text: "Synthetic task", attachments: [] },
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        createdAt,
+      });
+      assert.equal(Option.getOrThrow(yield* readTurnResult(input)).state, "pending");
+      yield* engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("session-result-running"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          providerInstanceId: modelSelection.instanceId,
+          runtimeMode: "full-access",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      });
+      yield* engine.dispatch({
+        type: "thread.message.assistant.delta",
+        commandId: CommandId.make("assistant-result-delta"),
+        threadId,
+        messageId: assistantId,
+        turnId,
+        delta: "Actual projected reply",
+        createdAt,
+      });
+      yield* engine.dispatch({
+        type: "thread.message.assistant.complete",
+        commandId: CommandId.make("assistant-result-complete"),
+        threadId,
+        messageId: assistantId,
+        turnId,
+        createdAt,
+      });
+      assert.equal(Option.getOrThrow(yield* readTurnResult(input)).state, "pending");
+      yield* engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("session-result-ready"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "codex",
+          providerInstanceId: modelSelection.instanceId,
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      });
+      assert.deepEqual(Option.getOrThrow(yield* readTurnResult(input)), {
+        ...input,
+        turnId,
+        instanceId: modelSelection.instanceId,
+        model: "synthetic-model",
+        effort: "high",
+        state: "succeeded",
+        outputText: "Actual projected reply",
+      });
+      const next = {
+        threadId,
+        messageId: MessageId.make("next-result"),
+        turnCommandId: CommandId.make("next-command"),
+      };
+      yield* engine.dispatch({
+        type: "thread.turn.start",
+        commandId: next.turnCommandId,
+        threadId,
+        message: {
+          messageId: next.messageId,
+          role: "user",
+          text: "Next synthetic task",
+          attachments: [],
+        },
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        createdAt,
+      });
+      const pending = Option.getOrThrow(yield* readTurnResult(next));
+      assert.equal(pending.state, "pending");
+      assert.equal(pending.outputText, null);
+      assert.equal(
+        Option.getOrThrow(yield* readTurnResult(input)).outputText,
+        "Actual projected reply",
+      );
+    }),
+  );
   it.effect("projects dispatched engine events immediately", () =>
     Effect.gen(function* () {
       const engine = yield* OrchestrationEngineService;

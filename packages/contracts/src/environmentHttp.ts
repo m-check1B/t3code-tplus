@@ -34,6 +34,8 @@ import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
   ClientOrchestrationCommand,
   DispatchResult,
+  OrchestrationTurnResultInput,
+  OrchestrationTurnResult,
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   OrchestrationThreadDetailSnapshot,
@@ -506,6 +508,21 @@ const EnvironmentOrchestrationThreadSnapshotQuery = {
 };
 
 export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
+  .add(
+    HttpApiEndpoint.get("turnResultCapabilities", "/api/orchestration/turn-result", {
+      headers: OptionalBearerHeaders,
+      success: Schema.Struct({ talkTurnResult: Schema.Literal("v1") }),
+      error: EnvironmentOrchestrationSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("turnResult", "/api/orchestration/turn-result", {
+      headers: OptionalBearerHeaders,
+      payload: OrchestrationTurnResultInput,
+      success: OrchestrationTurnResult,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
   .add(
     HttpApiEndpoint.get("snapshot", "/api/orchestration/snapshot", {
       headers: OptionalBearerHeaders,

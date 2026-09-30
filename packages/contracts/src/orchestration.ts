@@ -2390,3 +2390,24 @@ export class OrchestrationSearchThreadsError extends Schema.TaggedError<Orchestr
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
+
+/** Exact command result for paired clients; no thread-status inference. */
+export const OrchestrationTurnResultInput = Schema.Struct({
+  threadId: ThreadId.check(Schema.isPattern(/^[A-Za-z0-9._:-]{1,128}$/)),
+  messageId: MessageId.check(Schema.isPattern(/^[A-Za-z0-9._:-]{1,128}$/)),
+  turnCommandId: CommandId.check(Schema.isPattern(/^[A-Za-z0-9._:-]{1,128}$/)),
+});
+export type OrchestrationTurnResultInput = typeof OrchestrationTurnResultInput.Type;
+
+export const OrchestrationTurnResult = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  turnCommandId: CommandId,
+  turnId: Schema.NullOr(TurnId),
+  instanceId: Schema.NullOr(ProviderInstanceId),
+  model: Schema.NullOr(Schema.String),
+  effort: Schema.NullOr(Schema.String),
+  state: Schema.Literals(["pending", "succeeded", "failed", "cancelled"]),
+  outputText: Schema.NullOr(Schema.String),
+});
+export type OrchestrationTurnResult = typeof OrchestrationTurnResult.Type;
