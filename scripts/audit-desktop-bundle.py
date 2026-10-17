@@ -42,17 +42,8 @@ def audit(app, args):
             if count:
                 findings.append({"category": category, "path": name, "count": count})
         for category, pattern in inventory_patterns.items():
-            if category == "email":
-                matches = (pattern.search(data, max(0, at.start() - 64), at.end() + 279)
-                           for at in re.finditer(rb"@", data))
-            elif category == "tailnet":
-                matches = (pattern.search(data, max(0, end.start() - 512), end.end())
-                           for end in re.finditer(rb"\.ts\.net", data))
-            else:
-                matches = pattern.finditer(data)
-            for match in matches:
-                if match:
-                    inventories[category][hashlib.sha256(match.group().lower()).hexdigest()] += 1
+            for match in pattern.finditer(data):
+                inventories[category][hashlib.sha256(match.group().lower()).hexdigest()] += 1
         base = pathlib.PurePosixPath(name).name
         if base in ("app-update.yml", "dev-app-update.yml", ".env", ".npmrc", ".netrc", "credentials.json", "id_rsa", "id_ed25519") or base.startswith(".env."):
             findings.append({"category": "unexpected_runtime_file", "path": name})
