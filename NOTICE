@@ -1,0 +1,18 @@
+T3 Code TPLUS
+
+This is an independently maintained fork of T3 Code by Matej Havlin.
+Upstream T3 Code is Copyright (c) 2026 T3 Tools Inc. and is distributed
+under the MIT License. The complete upstream permission and warranty
+notice is preserved without modification in LICENSE, also shipped in
+the application's Contents/Resources directory alongside this NOTICE.
+
+TPLUS adds DeepSeek Harness support and exact-turn-result handling,
+and uses the T3 Code TPLUS name and com.verduona.t3code-tplus bundle id.
+TPLUS desktop releases use manual installation; no automatic update
+feed is configured. The upstream project does not publish these builds.
+
+Provenance: official upstream v0.0.42 is commit
+719a76ca1dbf5490f1aa33ffb9966301e02be9a9. The fork's actual upstream
+base is 7445aa733ada33e45289e5aa5055f79142556513, which includes 188
+additional upstream commits. Nine fork commits precede the tplus.2
+packaging remediation. Third-party dependency notices remain separate.

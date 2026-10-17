@@ -4,6 +4,7 @@
 import * as NodeFSP from "node:fs/promises";
 import * as NodeCrypto from "node:crypto";
 import * as NodeModule from "node:module";
+import * as NodeOS from "node:os";
 
 import {
   createPackageWithOptions,
@@ -1066,6 +1067,8 @@ export const WSL_RUNTIME_EXTRA_RESOURCES = [
   WSL_RUNTIME_ARCHIVE_HASH_EXTRA_RESOURCE,
 ] as const;
 export const DESKTOP_EXTRA_RESOURCES = [
+  { from: "LICENSE", to: "LICENSE" },
+  { from: "NOTICE", to: "NOTICE" },
   {
     from: "apps/desktop/prod-resources/resource-monitor",
     to: "resource-monitor",
@@ -2186,6 +2189,29 @@ export const stageLinuxCaptureHelper = Effect.fn("stageLinuxCaptureHelper")(func
   }
 });
 
+export function resolveResourceMonitorBuildEnv(
+  repoRoot: string,
+  homeDir: string,
+  env: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const flags =
+    env.CARGO_ENCODED_RUSTFLAGS !== undefined
+      ? env.CARGO_ENCODED_RUSTFLAGS.split("\x1f").filter(Boolean)
+      : (env.RUSTFLAGS?.trim().split(/\s+/u).filter(Boolean) ?? []);
+  // Rust embeds panic/source paths even without debug symbols. Put the most
+  // specific prefix last; rustc applies the last matching remap.
+  const prefixes = [
+    [homeDir, "/build/home"],
+    [env.CARGO_HOME, "/build/cargo"],
+    [env.RUSTUP_HOME, "/build/rustup"],
+    [repoRoot, "/build/source"],
+  ] as const;
+  for (const [source, destination] of prefixes) {
+    if (source) flags.push(`--remap-path-prefix=${source}=${destination}`);
+  }
+  return { ...env, CARGO_ENCODED_RUSTFLAGS: flags.join("\x1f") };
+}
+
 export const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* (input: {
   readonly repoRoot: string;
   readonly stageResourcesDir: string;
@@ -2218,6 +2244,7 @@ export const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* 
         ChildProcess.make(spawnCommand.command, spawnCommand.args, {
           cwd: input.repoRoot,
           shell: spawnCommand.shell,
+          env: resolveResourceMonitorBuildEnv(input.repoRoot, NodeOS.homedir(), process.env),
         }),
         {
           label: `cargo build resource monitor (${rustTarget})`,
@@ -3520,6 +3547,9 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* validateBundledClientAssets(path.dirname(bundledClientEntry));
 
   yield* fs.makeDirectory(path.join(stageAppDir, "apps/desktop"), { recursive: true });
+  for (const notice of ["LICENSE", "NOTICE"]) {
+    yield* fs.copyFile(path.join(repoRoot, notice), path.join(stageAppDir, notice));
+  }
   if (options.platform !== "win") {
     yield* fs.makeDirectory(path.join(stageAppDir, "apps/server"), { recursive: true });
   }

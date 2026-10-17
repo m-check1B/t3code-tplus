@@ -64,6 +64,7 @@ import {
   stageLinuxIconSize,
   stageDesktopDmgBackground,
   stageResourceMonitor,
+  resolveResourceMonitorBuildEnv,
   stageLinuxCaptureHelper,
   stageWslRuntimeArchive,
   bundlesWslRuntime,
@@ -632,6 +633,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         { from: "apps/desktop/prod-resources/browser-secret", to: "browser-secret" },
       ]);
       assert.deepStrictEqual(win.extraResources, [
+        { from: "LICENSE", to: "LICENSE" },
+        { from: "NOTICE", to: "NOTICE" },
         {
           from: "apps/desktop/prod-resources/resource-monitor",
           to: "resource-monitor",
@@ -642,6 +645,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       // No Linux CLI archive means staging never writes the runtime, so
       // listing it here would fail the build on a missing source file.
       assert.deepStrictEqual(winWithoutWslRuntime.extraResources, [
+        { from: "LICENSE", to: "LICENSE" },
+        { from: "NOTICE", to: "NOTICE" },
         {
           from: "apps/desktop/prod-resources/resource-monitor",
           to: "resource-monitor",
@@ -1917,8 +1922,42 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
-  it("stages the resource monitor as an external executable resource", () => {
+  it("ships the upstream permission notice and fork attribution in every desktop bundle", () => {
+    for (const name of ["LICENSE", "NOTICE"]) {
+      assert.isTrue(
+        DESKTOP_EXTRA_RESOURCES.some((resource) => resource.from === name && resource.to === name),
+        `${name} must be copied to the app resources`,
+      );
+    }
+  });
+
+  it("remaps native source, home and custom toolchain paths without losing compiler flags", () => {
+    const env = resolveResourceMonitorBuildEnv("/work/source", "/builder home", {
+      CARGO_HOME: "/toolchains/cargo",
+      RUSTUP_HOME: "/toolchains/rustup",
+      CARGO_ENCODED_RUSTFLAGS: "-C\x1ftarget-cpu=generic",
+    });
+    assert.deepStrictEqual(env.CARGO_ENCODED_RUSTFLAGS?.split("\x1f"), [
+      "-C",
+      "target-cpu=generic",
+      "--remap-path-prefix=/builder home=/build/home",
+      "--remap-path-prefix=/toolchains/cargo=/build/cargo",
+      "--remap-path-prefix=/toolchains/rustup=/build/rustup",
+      "--remap-path-prefix=/work/source=/build/source",
+    ]);
+    const plain = resolveResourceMonitorBuildEnv("/work/source", "/builder", {
+      RUSTFLAGS: "-C debuginfo=0",
+    });
+    assert.deepStrictEqual(plain.CARGO_ENCODED_RUSTFLAGS?.split("\x1f").slice(0, 2), [
+      "-C",
+      "debuginfo=0",
+    ]);
+  });
+
+  it("stages the resource monitor and notices as external resources", () => {
     assert.deepStrictEqual(DESKTOP_EXTRA_RESOURCES, [
+      { from: "LICENSE", to: "LICENSE" },
+      { from: "NOTICE", to: "NOTICE" },
       {
         from: "apps/desktop/prod-resources/resource-monitor",
         to: "resource-monitor",
