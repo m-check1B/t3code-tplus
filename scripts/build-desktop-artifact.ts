@@ -54,7 +54,8 @@ import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
-const DESKTOP_APP_ID = "com.t3tools.t3code";
+// T3 Code TPLUS: own bundle id so it never collides with upstream installs.
+const DESKTOP_APP_ID = "com.verduona.t3code-tplus";
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
@@ -2572,7 +2573,11 @@ export function resolveDesktopUpdateChannel(version: string): "latest" | "nightl
 // install can be pointed at one of these releases, and the build itself
 // reports that no update feed is configured instead of polling.
 export function isDesktopPreviewVersion(version: string): boolean {
-  return /-pr\./.test(version) || /-preview\.\d{8}\.\d+$/.test(version);
+  // TPLUS builds (`-tplus.<n>`) ship without an update feed: no upstream
+  // feed may ever replace them, and TPLUS releases are installed by hand.
+  return (
+    /-pr\./.test(version) || /-preview\.\d{8}\.\d+$/.test(version) || /-tplus\.\d+$/.test(version)
+  );
 }
 
 export function resolveDesktopWebAssetBrand(version: string): WebAssetBrand {
@@ -2640,7 +2645,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   const buildConfig: Record<string, unknown> = {
     appId: DESKTOP_APP_ID,
     productName: resolveDesktopProductName(version),
-    artifactName: "T3-Code-${version}-${arch}.${ext}",
+    artifactName: "T3-Code-TPLUS-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
     files: [
       ...DESKTOP_FILE_EXCLUSIONS,
